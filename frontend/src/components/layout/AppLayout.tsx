@@ -15,8 +15,7 @@ export function AppLayout({ bonus }: Props) {
         <div className="sticky top-0 z-30 flex items-center justify-center gap-2 py-1.5 text-xs font-medium bg-amber-50 border-b border-amber-200 text-amber-800">
           <span className="text-sm">🎰</span>
           今日倍数
-          <span className="font-black text-base text-amber-600">{bonus.multiplier}×</span>
-          <span className="text-amber-500/70">（{bonus.rolls.join(' + ')}）</span>
+          <span className="font-black text-base text-amber-600">{bonus.multiplier.toFixed(1)}×</span>
         </div>
       )}
 

@@ -54,7 +54,7 @@ export function Dashboard({ bonus }: { bonus: DailyBonus | null }) {
           </div>
           <div className="flex-1">
             <p className="text-xs text-amber-700/70 font-medium">今日倍数</p>
-            <p className="text-2xl font-black text-amber-600 leading-tight">{bonus.multiplier}<span className="text-base font-bold text-amber-500 ml-0.5">×</span></p>
+            <p className="text-2xl font-black text-amber-600 leading-tight">{bonus.multiplier.toFixed(1)}<span className="text-base font-bold text-amber-500 ml-0.5">×</span></p>
           </div>
           <p className="text-xs text-amber-600/70 text-right max-w-[80px]">
             {bonus.multiplier >= 12 ? '🔥 大爆发日' :
