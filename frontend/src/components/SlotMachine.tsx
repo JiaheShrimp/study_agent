@@ -111,22 +111,34 @@ function Reel({
     }
   }, [active])
 
+  // idle 状态：只显示 ? 占位符
+  if (!active && displayValue === null) {
+    return (
+      <div
+        className="relative overflow-hidden rounded-2xl border border-border bg-secondary/50 shadow-inner flex items-center justify-center"
+        style={{ width: 64, height: CELL_H }}
+      >
+        <span className="font-black text-2xl text-muted-foreground/40">?</span>
+      </div>
+    )
+  }
+
   return (
     <div
       className="relative overflow-hidden rounded-2xl border border-border bg-secondary/50 shadow-inner"
       style={{ width: 64, height: CELL_H * VISIBLE }}
     >
-      {/* 상하 그라데이션 마스크 */}
+      {/* 上下渐变遮罩 */}
       <div className="absolute inset-x-0 top-0 h-10 z-10 pointer-events-none"
         style={{ background: 'linear-gradient(to bottom, hsl(var(--card)) 0%, transparent 100%)' }} />
       <div className="absolute inset-x-0 bottom-0 h-10 z-10 pointer-events-none"
         style={{ background: 'linear-gradient(to top, hsl(var(--card)) 0%, transparent 100%)' }} />
 
-      {/* 중앙 선택 강조 */}
+      {/* 中间选中高亮 */}
       <div className="absolute inset-x-0 z-0 border-y border-primary/25 bg-primary/5"
         style={{ top: CELL_H, height: CELL_H }} />
 
-      {/* 숫자 열 */}
+      {/* 数字列 */}
       <div
         className="absolute w-full"
         style={{
@@ -146,7 +158,7 @@ function Reel({
         ))}
       </div>
 
-      {/* 정지 후 강조 표시 */}
+      {/* 停止后强调显示 */}
       {displayValue !== null && (
         <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
           <span className="font-black text-3xl text-primary">{displayValue}</span>
