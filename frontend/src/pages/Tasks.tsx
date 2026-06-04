@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Check, Trash2, Plus, Settings, Star, Clock, Swords, X } from 'lucide-react'
+import { Check, Trash2, Plus, Settings, Star, Clock, Swords, X, Play } from 'lucide-react'
 import { api, type DailyTask, type DailyBounty } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { TaskRunner } from '@/components/TaskRunner'
 
 // ── 星级选择 ──────────────────────────────────────────────────
 function StarPicker({ value, onChange }: { value: number; onChange: (v: number) => void }) {
@@ -83,11 +84,12 @@ function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; star
 }
 
 // ── 单条任务行 ────────────────────────────────────────────────
-function TaskRow({ task, onToggle, onDelete, onUpdate }: {
+function TaskRow({ task, onToggle, onDelete, onUpdate, onStart }: {
   task: DailyTask
   onToggle: () => void
   onDelete: () => void
   onUpdate: (t: { content: string; hours: number; stars: number }) => void
+  onStart: () => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState({ content: task.content, hours: task.hours, stars: task.stars })
@@ -155,6 +157,16 @@ function TaskRow({ task, onToggle, onDelete, onUpdate }: {
           </span>
         </div>
       </button>
+      {/* 开始按钮（未完成才显示） */}
+      {!task.done && (
+        <button
+          onClick={e => { e.stopPropagation(); onStart() }}
+          className="opacity-0 group-hover:opacity-100 mt-0.5 text-muted-foreground hover:text-primary transition-all shrink-0 ml-1"
+          title="开始任务"
+        >
+          <Play className="h-3.5 w-3.5" />
+        </button>
+      )}
       <button onClick={onDelete}
         className="opacity-0 group-hover:opacity-100 mt-0.5 text-muted-foreground hover:text-rose-500 transition-all shrink-0">
         <Trash2 className="h-3.5 w-3.5" />
@@ -213,10 +225,11 @@ function BountyCard({ bounty, onRespond }: {
 
 // ── 主页面 ────────────────────────────────────────────────────
 export function Tasks() {
-  const [tasks, setTasks]       = useState<DailyTask[]>([])
-  const [bounties, setBounties]  = useState<DailyBounty[]>([])
-  const [loading, setLoading]   = useState(true)
+  const [tasks, setTasks]           = useState<DailyTask[]>([])
+  const [bounties, setBounties]      = useState<DailyBounty[]>([])
+  const [loading, setLoading]       = useState(true)
   const [bountyModal, setBountyModal] = useState(false)
+  const [runningTask, setRunningTask] = useState<DailyTask | null>(null)
 
   const today = new Date().toISOString().slice(0, 10)
 
@@ -310,6 +323,7 @@ export function Tasks() {
                   onToggle={() => handleToggle(t.id)}
                   onDelete={() => handleDelete(t.id)}
                   onUpdate={u => handleUpdate(t.id, u)}
+                  onStart={() => setRunningTask(t)}
                 />
               ))}
             </div>
@@ -320,6 +334,14 @@ export function Tasks() {
         <QuickAdd onAdd={handleAdd} />
 
       </div>
+
+      {/* 任务运行器 */}
+      {runningTask && (
+        <TaskRunner
+          task={runningTask}
+          onClose={() => { setRunningTask(null); reload() }}
+        />
+      )}
 
       {/* 赏金任务弹窗 */}
       {bountyModal && (

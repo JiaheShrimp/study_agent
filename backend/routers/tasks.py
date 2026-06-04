@@ -223,3 +223,29 @@ def respond_bounty(bounty_id: str, status: Literal["accepted", "skipped"], date:
             save_daily_bounties(today, data)
             return data["bounties"][i]
     raise HTTPException(404, "赏金任务不存在")
+
+# ── 任务执行记录 ─────────────────────────────────────────────
+
+class TaskRunResult(BaseModel):
+    task_id: str
+    date: str
+    success: bool
+    actual_seconds: int
+    pause_count: int
+    pause_seconds: int
+
+@router.post("/run", response_model=TaskRunResult, status_code=201)
+def save_run_result(body: TaskRunResult):
+    import os
+    from storage.tasks import _read, _write, DATA_DIR
+    path = os.path.join(DATA_DIR, "task_runs.json")
+    runs: list = _read(path, [])
+    runs.append(body.model_dump())
+    _write(path, runs)
+    if body.success:
+        tasks = load_daily_tasks(body.date)
+        for t in tasks:
+            if t["id"] == body.task_id:
+                t["done"] = True
+        save_daily_tasks(body.date, tasks)
+    return body
