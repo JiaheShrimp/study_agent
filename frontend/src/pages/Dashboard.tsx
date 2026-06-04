@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { Trophy, CheckSquare, BookOpen, Flame, Star, ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { api, type Win, type WinStats } from '@/lib/api'
+import { api, type Win, type WinStats, type DailyBonus } from '@/lib/api'
 
 const LEVEL_LABEL = { small: '小赢', medium: '中赢', big: '特大赢' }
 const STARS = { small: '⭐', medium: '⭐⭐', big: '⭐⭐⭐' }
@@ -19,7 +19,7 @@ function greeting() {
   return '晚上好'
 }
 
-export function Dashboard() {
+export function Dashboard({ bonus }: { bonus: DailyBonus | null }) {
   const [todayWins, setTodayWins] = useState<Win[]>([])
   const [stats, setStats] = useState<WinStats | null>(null)
   const [streak, setStreak] = useState(0)
@@ -37,10 +37,32 @@ export function Dashboard() {
   return (
     <div className="p-6 max-w-4xl mx-auto">
       {/* 顶部问候 */}
-      <div className="mb-8">
+      <div className="mb-6">
         <h2 className="text-2xl font-bold">{greeting()}，今天也要赢麻了 👋</h2>
         <p className="text-muted-foreground mt-1">{new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}</p>
       </div>
+
+      {/* 今日倍数卡片 */}
+      {bonus && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 flex items-center gap-4">
+          <div className="flex gap-2">
+            {bonus.rolls.map((n, i) => (
+              <div key={i} className="w-10 h-10 rounded-xl bg-white border border-amber-200 flex items-center justify-center font-black text-xl text-amber-600 shadow-sm">
+                {n}
+              </div>
+            ))}
+          </div>
+          <div className="flex-1">
+            <p className="text-xs text-amber-700/70 font-medium">今日倍数</p>
+            <p className="text-2xl font-black text-amber-600 leading-tight">{bonus.multiplier}<span className="text-base font-bold text-amber-500 ml-0.5">×</span></p>
+          </div>
+          <p className="text-xs text-amber-600/70 text-right max-w-[80px]">
+            {bonus.multiplier >= 12 ? '🔥 大爆发日' :
+             bonus.multiplier >= 9  ? '✨ 状态不错' :
+             bonus.multiplier >= 6  ? '👍 稳扎稳打' : '💪 平凡见伟大'}
+          </p>
+        </div>
+      )}
 
       {/* 统计卡片行 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">

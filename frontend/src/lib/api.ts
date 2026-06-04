@@ -41,7 +41,17 @@ export interface ReminderConfig {
   reminder_times: string[]
 }
 
+export interface DailyBonus {
+  date: string
+  rolls: number[]
+  multiplier: number
+}
+
 export const api = {
+  bonus: {
+    today: () => get<DailyBonus | null>('/bonus/today'),
+    save: (bonus: DailyBonus) => post<DailyBonus>('/bonus/today', bonus),
+  },
   reminder: {
     get: () => get<ReminderConfig>('/config/reminder'),
     update: (cfg: ReminderConfig) =>

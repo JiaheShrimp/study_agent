@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import wins
 from routers import config
+from routers import bonus
 
 app = FastAPI(title="Learning Agent API")
 
@@ -19,6 +20,7 @@ app.add_middleware(
 
 app.include_router(wins.router)
 app.include_router(config.router)
+app.include_router(bonus.router)
 
 
 @app.get("/health")
