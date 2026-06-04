@@ -3,7 +3,9 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Dashboard } from '@/pages/Dashboard'
 import { Wins } from '@/pages/Wins'
-import { Tasks, Plan } from '@/pages/Placeholder'
+import { Plan } from '@/pages/Placeholder'
+import { Tasks } from '@/pages/Tasks'
+import { TasksManage } from '@/pages/TasksManage'
 import { SlotMachine } from '@/components/SlotMachine'
 import { api, type DailyBonus } from '@/lib/api'
 
@@ -36,6 +38,7 @@ export default function App() {
           <Route index element={<Dashboard bonus={bonus} />} />
           <Route path="wins" element={<Wins />} />
           <Route path="tasks" element={<Tasks />} />
+          <Route path="tasks/manage" element={<TasksManage />} />
           <Route path="plan" element={<Plan />} />
         </Route>
       </Routes>

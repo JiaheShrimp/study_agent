@@ -47,7 +47,63 @@ export interface DailyBonus {
   multiplier: number  // 1.0-3.0，一位小数
 }
 
+export interface TaskTemplate {
+  id: string
+  content: string
+  hours: number
+  stars: number
+}
+
+export interface DailyTask {
+  id: string
+  content: string
+  hours: number
+  stars: number
+  done: boolean
+  from_template: boolean
+}
+
+export interface BountyTask {
+  id: string
+  content: string
+  hours: number
+  stars: number
+  buff: string
+}
+
+export interface DailyBounty extends BountyTask {
+  status: 'pending' | 'accepted' | 'skipped'
+}
+
 export const api = {
+  tasks: {
+    // 模板
+    templates: () => get<TaskTemplate[]>('/tasks/templates'),
+    createTemplate: (t: Omit<TaskTemplate, 'id'>) => post<TaskTemplate>('/tasks/templates', t),
+    updateTemplate: (id: string, t: Omit<TaskTemplate, 'id'>) =>
+      post<TaskTemplate>(`/tasks/templates/${id}`, t, 'PUT'),
+    deleteTemplate: (id: string) => del(`/tasks/templates/${id}`),
+    // 当日任务
+    daily: (date?: string) => get<DailyTask[]>(`/tasks/daily${date ? `?date=${date}` : ''}`),
+    initDaily: () => post<DailyTask[]>('/tasks/daily/init', {}),
+    addDaily: (t: { content: string; hours: number; stars: number }) =>
+      post<DailyTask>('/tasks/daily', t),
+    updateDaily: (id: string, t: { content: string; hours: number; stars: number }) =>
+      post<DailyTask>(`/tasks/daily/${id}`, t, 'PUT'),
+    toggleDone: (id: string) => post<DailyTask>(`/tasks/daily/${id}/done`, {}, 'PATCH'),
+    deleteDaily: (id: string) => del(`/tasks/daily/${id}`),
+    // 赏金任务库
+    bountyPool: () => get<BountyTask[]>('/tasks/bounty/pool'),
+    createBounty: (b: Omit<BountyTask, 'id'>) => post<BountyTask>('/tasks/bounty/pool', b),
+    updateBounty: (id: string, b: Omit<BountyTask, 'id'>) =>
+      post<BountyTask>(`/tasks/bounty/pool/${id}`, b, 'PUT'),
+    deleteBounty: (id: string) => del(`/tasks/bounty/pool/${id}`),
+    // 每日赏金
+    dailyBounties: () => get<DailyBounty[]>('/tasks/bounty/daily'),
+    generateBounties: () => post<DailyBounty[]>('/tasks/bounty/daily/generate', {}),
+    respondBounty: (id: string, status: 'accepted' | 'skipped') =>
+      post<DailyBounty>(`/tasks/bounty/daily/${id}?status=${status}`, {}, 'PATCH'),
+  },
   bonus: {
     today: () => get<DailyBonus | null>('/bonus/today'),
     save: (bonus: DailyBonus) => post<DailyBonus>('/bonus/today', bonus),
