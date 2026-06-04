@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import wins
+from routers import config
 
 app = FastAPI(title="Learning Agent API")
 
@@ -17,6 +18,7 @@ app.add_middleware(
 )
 
 app.include_router(wins.router)
+app.include_router(config.router)
 
 
 @app.get("/health")

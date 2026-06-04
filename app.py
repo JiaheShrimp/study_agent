@@ -5,40 +5,41 @@ Study Agent 托盘启动器
 import sys
 import os
 import time
+import math
+import json
 import threading
 import subprocess
 import webbrowser
+from datetime import datetime
 
 import pystray
 from PIL import Image, ImageDraw
 
 # ── 路径 ─────────────────────────────────────────────────────
 
-ROOT    = os.path.dirname(os.path.abspath(__file__))
-BACKEND = os.path.join(ROOT, "backend")
+ROOT     = os.path.dirname(os.path.abspath(__file__))
+BACKEND  = os.path.join(ROOT, "backend")
 FRONTEND = os.path.join(ROOT, "frontend")
 APP_URL  = "http://localhost:5173"
+CONFIG_FILE = os.path.join(ROOT, "backend", "data", "config.json")
 
-# ── 图标（用 Pillow 绘制，无需图片文件）────────────────────
+# ── 图标 ─────────────────────────────────────────────────────
 
 def make_icon() -> Image.Image:
     size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    img  = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    # 圆形背景
-    draw.ellipse([2, 2, size-2, size-2], fill=(139, 90, 60))
-    # 星形（三角近似）
+    draw.ellipse([2, 2, size - 2, size - 2], fill=(139, 90, 60))
     cx, cy = size // 2, size // 2
-    star_pts = []
-    import math
+    pts = []
     for i in range(5):
-        angle_out = math.radians(i * 72 - 90)
-        angle_in  = math.radians(i * 72 - 90 + 36)
-        star_pts += [
-            (cx + 20 * math.cos(angle_out), cy + 20 * math.sin(angle_out)),
-            (cx + 9  * math.cos(angle_in),  cy + 9  * math.sin(angle_in)),
+        a_out = math.radians(i * 72 - 90)
+        a_in  = math.radians(i * 72 - 90 + 36)
+        pts += [
+            (cx + 20 * math.cos(a_out), cy + 20 * math.sin(a_out)),
+            (cx + 9  * math.cos(a_in),  cy + 9  * math.sin(a_in)),
         ]
-    draw.polygon(star_pts, fill=(255, 220, 120))
+    draw.polygon(pts, fill=(255, 220, 120))
     return img
 
 # ── 进程管理 ─────────────────────────────────────────────────
@@ -49,7 +50,7 @@ def start_backend() -> subprocess.Popen:
     return subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "main:app", "--port", "8000"],
         cwd=BACKEND,
-        creationflags=subprocess.CREATE_NO_WINDOW,  # Windows：不弹黑窗口
+        creationflags=subprocess.CREATE_NO_WINDOW,
     )
 
 def start_frontend() -> subprocess.Popen:
@@ -61,15 +62,13 @@ def start_frontend() -> subprocess.Popen:
     )
 
 def wait_and_open(seconds: int = 3) -> None:
-    """等后端/前端就绪后打开浏览器。"""
     time.sleep(seconds)
     webbrowser.open(APP_URL)
 
 def launch_all() -> None:
     _procs.append(start_backend())
     _procs.append(start_frontend())
-    t = threading.Thread(target=wait_and_open, daemon=True)
-    t.start()
+    threading.Thread(target=wait_and_open, daemon=True).start()
 
 def stop_all() -> None:
     for p in _procs:
@@ -78,7 +77,56 @@ def stop_all() -> None:
         except Exception:
             pass
 
-# ── 托盘菜单动作 ─────────────────────────────────────────────
+# ── 通知 ─────────────────────────────────────────────────────
+
+def send_notification() -> None:
+    try:
+        from winotify import Notification, audio
+        toast = Notification(
+            app_id="Study Agent",
+            title="该记录今天的赢了 🎉",
+            msg="打开应用，把今天的进步记下来吧！",
+            duration="short",
+            launch=APP_URL,
+        )
+        toast.set_audio(audio.Default, loop=False)
+        toast.show()
+    except Exception:
+        pass
+
+def _load_reminder_config() -> tuple[bool, list[str]]:
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            return cfg.get("reminder_enabled", False), cfg.get("reminder_times", ["21:00"])
+    except Exception:
+        pass
+    return False, ["21:00"]
+
+def reminder_loop() -> None:
+    """每分钟检查一次是否到了提醒时间，避免同一分钟重复通知。"""
+    notified_today: set[str] = set()
+
+    while True:
+        now  = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        hm    = now.strftime("%H:%M")
+
+        # 跨天清空记录
+        if not any(k.startswith(today) for k in notified_today):
+            notified_today.clear()
+
+        enabled, times = _load_reminder_config()
+        key = f"{today}_{hm}"
+
+        if enabled and hm in times and key not in notified_today:
+            notified_today.add(key)
+            send_notification()
+
+        time.sleep(30)  # 每 30 秒检查，确保不漏掉整点
+
+# ── 托盘菜单 ─────────────────────────────────────────────────
 
 def on_open(icon, item):
     webbrowser.open(APP_URL)
@@ -91,6 +139,7 @@ def on_quit(icon, item):
 
 def main() -> None:
     launch_all()
+    threading.Thread(target=reminder_loop, daemon=True).start()
 
     icon = pystray.Icon(
         name="study_agent",

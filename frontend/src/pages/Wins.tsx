@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { ChevronLeft, ChevronRight, BarChart2, X, Trash2, Plus } from 'lucide-react'
+import { ChevronLeft, ChevronRight, BarChart2, X, Trash2, Plus, Bell, BellOff } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { api, type Win, type WinStats } from '@/lib/api'
+import { api, type Win, type WinStats, type ReminderConfig } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 // ── 常量 ─────────────────────────────────────────────────────
@@ -25,7 +25,8 @@ export function Wins() {
   const [viewDate, setViewDate]   = useState(new Date())
   const [selected, setSelected]   = useState(today)
   const [byDate, setByDate]       = useState<Record<string, Win[]>>({})
-  const [analysisOpen, setAnalysisOpen] = useState(false)
+  const [analysisOpen, setAnalysisOpen]   = useState(false)
+  const [reminderOpen, setReminderOpen]   = useState(false)
 
   const year  = viewDate.getFullYear()
   const month = viewDate.getMonth()
@@ -55,13 +56,22 @@ export function Wins() {
             <h1 className="text-xl font-semibold tracking-tight">赢麻了</h1>
             <p className="text-xs text-muted-foreground mt-0.5">记录每一个值得庆祝的进步</p>
           </div>
-          <button
-            onClick={() => setAnalysisOpen(true)}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg px-3 py-1.5 transition-colors hover:bg-secondary"
-          >
-            <BarChart2 className="h-3.5 w-3.5" />
-            分析
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setReminderOpen(true)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg px-3 py-1.5 transition-colors hover:bg-secondary"
+            >
+              <Bell className="h-3.5 w-3.5" />
+              提醒
+            </button>
+            <button
+              onClick={() => setAnalysisOpen(true)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg px-3 py-1.5 transition-colors hover:bg-secondary"
+            >
+              <BarChart2 className="h-3.5 w-3.5" />
+              分析
+            </button>
+          </div>
         </div>
 
         {/* 日历卡片 */}
@@ -177,6 +187,9 @@ export function Wins() {
 
       {/* 分析抽屉 */}
       {analysisOpen && <AnalysisDrawer onClose={() => setAnalysisOpen(false)} />}
+
+      {/* 提醒设置抽屉 */}
+      {reminderOpen && <ReminderDrawer onClose={() => setReminderOpen(false)} />}
     </div>
   )
 }
@@ -387,6 +400,148 @@ function AnalysisDrawer({ onClose }: { onClose: () => void }) {
               </div>
             </>
           ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 提醒设置抽屉 ──────────────────────────────────────────────
+
+function ReminderDrawer({ onClose }: { onClose: () => void }) {
+  const [cfg, setCfg]     = useState<ReminderConfig>({ reminder_enabled: false, reminder_times: ['21:00'] })
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving]   = useState(false)
+  const [saved, setSaved]     = useState(false)
+
+  useEffect(() => {
+    api.reminder.get().then(setCfg).finally(() => setLoading(false))
+  }, [])
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      await api.reminder.update(cfg)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function addTime() {
+    setCfg(c => ({ ...c, reminder_times: [...c.reminder_times, '20:00'] }))
+  }
+
+  function removeTime(i: number) {
+    setCfg(c => ({ ...c, reminder_times: c.reminder_times.filter((_, idx) => idx !== i) }))
+  }
+
+  function updateTime(i: number, val: string) {
+    setCfg(c => {
+      const times = [...c.reminder_times]
+      times[i] = val
+      return { ...c, reminder_times: times }
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-foreground/10 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-xs bg-card border-l border-border shadow-2xl flex flex-col h-full">
+
+        {/* 头部 */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <span className="text-sm font-semibold">提醒设置</span>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-6 flex-1 overflow-y-auto">
+          {loading ? (
+            <p className="text-xs text-muted-foreground text-center py-8">加载中…</p>
+          ) : (
+            <>
+              {/* 开关 */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">每日提醒</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">到点弹窗提醒你记录今天的赢</p>
+                </div>
+                <button
+                  onClick={() => setCfg(c => ({ ...c, reminder_enabled: !c.reminder_enabled }))}
+                  className={cn(
+                    'relative w-10 h-5.5 rounded-full transition-colors',
+                    cfg.reminder_enabled ? 'bg-primary' : 'bg-secondary border border-border'
+                  )}
+                  style={{ height: '22px' }}
+                >
+                  <span className={cn(
+                    'absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform',
+                    cfg.reminder_enabled ? 'translate-x-5' : 'translate-x-0.5'
+                  )} />
+                </button>
+              </div>
+
+              {/* 时间列表 */}
+              {cfg.reminder_enabled && (
+                <div className="space-y-3">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">提醒时间</p>
+                  {cfg.reminder_times.map((t, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <input
+                        type="time"
+                        value={t}
+                        onChange={e => updateTime(i, e.target.value)}
+                        className="flex-1 h-9 rounded-lg border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
+                      />
+                      {cfg.reminder_times.length > 1 && (
+                        <button
+                          onClick={() => removeTime(i)}
+                          className="text-muted-foreground hover:text-rose-500 transition-colors"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {cfg.reminder_times.length < 4 && (
+                    <button
+                      onClick={addTime}
+                      className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      添加时间
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {!cfg.reminder_enabled && (
+                <div className="rounded-xl bg-secondary/60 p-4 flex items-center gap-3">
+                  <BellOff className="h-5 w-5 text-muted-foreground shrink-0" />
+                  <p className="text-xs text-muted-foreground">提醒已关闭，开启后将在设定时间弹出通知</p>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* 底部保存 */}
+        <div className="p-5 border-t border-border">
+          <button
+            onClick={handleSave}
+            disabled={saving || loading}
+            className={cn(
+              'w-full h-9 rounded-lg text-sm font-medium transition-colors',
+              saved
+                ? 'bg-green-100 text-green-700'
+                : 'bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50'
+            )}
+          >
+            {saved ? '✓ 已保存' : saving ? '保存中…' : '保存设置'}
+          </button>
         </div>
       </div>
     </div>

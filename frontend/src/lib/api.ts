@@ -26,9 +26,9 @@ async function del(path: string): Promise<void> {
   if (!res.ok) throw new Error(await res.text())
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function post<T>(path: string, body: unknown, method = 'POST'): Promise<T> {
   const res = await fetch(BASE + path, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
@@ -36,7 +36,17 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return res.json()
 }
 
+export interface ReminderConfig {
+  reminder_enabled: boolean
+  reminder_times: string[]
+}
+
 export const api = {
+  reminder: {
+    get: () => get<ReminderConfig>('/config/reminder'),
+    update: (cfg: ReminderConfig) =>
+      post<ReminderConfig>('/config/reminder', cfg, 'PUT'),
+  },
   wins: {
     list: () => get<Win[]>('/wins/'),
     byDate: () => get<Record<string, Win[]>>('/wins/by-date'),
