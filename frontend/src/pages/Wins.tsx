@@ -118,11 +118,13 @@ export function Wins() {
                   key={key}
                   onClick={() => setSelected(key)}
                   className={cn(
-                    'relative flex flex-col items-center justify-center rounded-xl py-2 min-h-[52px] text-xs font-medium transition-all',
+                    'relative flex flex-col items-center justify-center rounded-2xl py-2 min-h-[56px] text-xs font-medium transition-all',
                     isSelected
                       ? 'bg-primary text-primary-foreground shadow-sm'
-                      : 'hover:bg-secondary text-foreground',
-                    isToday && !isSelected ? 'ring-1 ring-primary/40' : ''
+                      : stars > 0
+                        ? 'bg-secondary text-foreground'
+                        : 'text-foreground/70 hover:bg-secondary/60',
+                    isToday && !isSelected ? 'ring-1 ring-primary/50' : ''
                   )}
                 >
                   <span>{d}</span>

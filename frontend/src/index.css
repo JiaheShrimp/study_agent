@@ -4,31 +4,31 @@
 
 @layer base {
   :root {
-    /* 暖灰色系 monochromatic — muted & pastel */
-    --background:    30 12% 97%;
-    --foreground:    25 15% 18%;
+    /* 纸质暖米白系 */
+    --background:    36 20% 96%;
+    --foreground:    25 18% 16%;
 
-    --card:          0 0% 100%;
-    --card-foreground: 25 15% 18%;
+    --card:          36 18% 99%;
+    --card-foreground: 25 18% 16%;
 
-    --border:        25 10% 90%;
-    --input:         25 10% 90%;
+    --border:        30 12% 88%;
+    --input:         30 12% 88%;
 
-    /* 主色：柔和的暖棕 */
-    --primary:       25 40% 42%;
-    --primary-foreground: 30 20% 98%;
+    /* 主色：暖棕 */
+    --primary:       28 45% 40%;
+    --primary-foreground: 36 30% 97%;
 
-    --secondary:     30 10% 94%;
-    --secondary-foreground: 25 15% 35%;
+    --secondary:     34 14% 92%;
+    --secondary-foreground: 25 15% 32%;
 
-    --muted:         30 8% 94%;
-    --muted-foreground: 25 10% 52%;
+    --muted:         34 12% 92%;
+    --muted-foreground: 25 10% 54%;
 
-    --accent:        30 30% 92%;
-    --accent-foreground: 25 40% 36%;
+    --accent:        28 35% 90%;
+    --accent-foreground: 28 45% 34%;
 
-    --ring:          25 40% 42%;
-    --radius:        0.875rem;
+    --ring:          28 45% 40%;
+    --radius:        1rem;
   }
 
   * { @apply border-border; }
@@ -41,7 +41,12 @@
 }
 
 @layer utilities {
-  .win-small  { @apply bg-amber-50 text-amber-700 border border-amber-200; }
-  .win-medium { @apply bg-orange-50 text-orange-700 border border-orange-200; }
-  .win-big    { @apply bg-rose-50 text-rose-700 border border-rose-200; }
+  .win-small  { @apply bg-amber-50 text-amber-700 border border-amber-200/80; }
+  .win-medium { @apply bg-orange-50 text-orange-700 border border-orange-200/80; }
+  .win-big    { @apply bg-rose-50 text-rose-700 border border-rose-200/80; }
+
+  /* 纸质纹理背景 */
+  .paper {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='400'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeBlend in='SourceGraphic' mode='multiply' result='blend'/%3E%3CfeComposite in='blend' in2='SourceGraphic' operator='in'/%3E%3C/filter%3E%3Crect width='400' height='400' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  }
 }

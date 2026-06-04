@@ -44,7 +44,7 @@ export interface ReminderConfig {
 export interface DailyBonus {
   date: string
   rolls: number[]
-  multiplier: number
+  multiplier: number  // 1.0-3.0，一位小数
 }
 
 export const api = {

@@ -9,7 +9,7 @@ router = APIRouter(prefix="/bonus", tags=["bonus"])
 class DailyBonus(BaseModel):
     date: str        # YYYY-MM-DD
     rolls: list[int] # 三个数字
-    multiplier: int  # 总倍数
+    multiplier: float  # 倍数（1.0-3.0）
 
 
 @router.get("/today", response_model=DailyBonus | None)
