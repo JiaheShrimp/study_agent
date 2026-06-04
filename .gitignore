@@ -20,6 +20,9 @@ frontend/node_modules/
 frontend/dist/
 frontend/screenshots/
 
+# 本地启动脚本
+启动.vbs
+
 # 系统
 .DS_Store
 Thumbs.db
