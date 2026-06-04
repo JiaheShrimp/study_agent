@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+
+# 数据文件（本地数据不上传）
+backend/data/wins.json
+
+# 旧版 CLI 文件（已迁移至 backend/）
+main.py
+features/
+storage/
+data/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/screenshots/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
