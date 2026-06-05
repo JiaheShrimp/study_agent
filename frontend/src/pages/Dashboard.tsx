@@ -4,6 +4,7 @@ import { Trophy, CheckSquare, BookOpen, Flame, Star, ArrowRight } from 'lucide-r
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { api, type Win, type WinStats, type DailyBonus } from '@/lib/api'
+import { DayTimeline } from '@/components/DayTimeline'
 
 const LEVEL_LABEL = { small: '小赢', medium: '中赢', big: '特大赢' }
 const STARS = { small: '⭐', medium: '⭐⭐', big: '⭐⭐⭐' }
@@ -133,6 +134,9 @@ export function Dashboard({ bonus }: { bonus: DailyBonus | null }) {
           <FeatureCard to="/wins" icon="📊" label="分析" desc="趋势与洞察" />
         </div>
       </div>
+
+      {/* 今日时间轴 */}
+      <DayTimeline />
     </div>
   )
 }

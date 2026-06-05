@@ -228,8 +228,11 @@ def respond_bounty(bounty_id: str, status: Literal["accepted", "skipped"], date:
 
 class TaskRunResult(BaseModel):
     task_id: str
+    task_content: str = ""
     date: str
     success: bool
+    started_at: str = ""
+    ended_at: str = ""
     actual_seconds: int
     pause_count: int
     pause_seconds: int
@@ -249,3 +252,16 @@ def save_run_result(body: TaskRunResult):
                 t["done"] = True
         save_daily_tasks(body.date, tasks)
     return body
+
+@router.get("/runs", response_model=list[TaskRunResult])
+def get_runs(date: str | None = None):
+    """返回指定日期（或全部）的执行记录，过滤无时间信息的旧格式。"""
+    import os
+    from storage.tasks import _read, DATA_DIR
+    path = os.path.join(DATA_DIR, "task_runs.json")
+    runs: list = _read(path, [])
+    if date:
+        runs = [r for r in runs if r.get("date") == date]
+    # 只返回有 started_at 的记录（旧格式无此字段，跳过）
+    runs = [r for r in runs if r.get("started_at")]
+    return runs

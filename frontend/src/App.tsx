@@ -14,15 +14,19 @@ export default function App() {
   const [bonus, setBonus] = useState<DailyBonus | null>(null)
 
   useEffect(() => {
+    // 8 点前不弹老虎机
+    const hour = new Date().getHours()
+    if (hour < 8) return
+
     api.bonus.today().then(b => {
       if (b) {
         setBonus(b)
       } else {
-        // 今天还没抽过，显示老虎机
         setShowSlot(true)
       }
     }).catch(() => {
-      // 后端未就绪时静默忽略，不阻塞页面
+      // 后端未就绪，仍然弹老虎机（离线状态下可跳过）
+      setShowSlot(true)
     })
   }, [])
 

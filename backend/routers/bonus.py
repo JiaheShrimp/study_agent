@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from fastapi import APIRouter
 from pydantic import BaseModel
 from storage.config import load_config, save_config
@@ -7,26 +7,42 @@ router = APIRouter(prefix="/bonus", tags=["bonus"])
 
 
 class DailyBonus(BaseModel):
-    date: str        # YYYY-MM-DD
-    rolls: list[int] # 三个数字
-    multiplier: float  # 倍数（1.0-3.0）
+    date: str        # YYYY-MM-DD（以当天8点为起点的"日期"）
+    rolls: list[int]
+    multiplier: float  # 1.0-3.0
+
+
+def _current_game_date() -> str:
+    """
+    游戏日期以当天 08:00 为起点。
+    00:00-07:59 仍属于前一天的游戏日（前一天的倍数继续有效）。
+    """
+    now = datetime.now()
+    if now.hour < 8:
+        # 还未到 8 点，属于昨天的游戏日
+        from datetime import timedelta
+        return str((now - timedelta(days=1)).date())
+    return str(now.date())
 
 
 @router.get("/today", response_model=DailyBonus | None)
 def get_today_bonus():
-    """返回今天已保存的倍数，没有则返回 null。"""
+    """返回当前游戏日的倍数，没有则返回 null。"""
     cfg = load_config()
-    today = str(date.today())
+    game_date = _current_game_date()
     saved = cfg.get("daily_bonus")
-    if saved and saved.get("date") == today:
+    if saved and saved.get("date") == game_date:
         return DailyBonus(**saved)
     return None
 
 
 @router.post("/today", response_model=DailyBonus)
 def save_today_bonus(body: DailyBonus):
-    """保存今天的抽奖结果（只存当天，第二天自动失效）。"""
+    """保存当前游戏日的抽奖结果。"""
     cfg = load_config()
-    cfg["daily_bonus"] = body.model_dump()
+    # 强制写入当前游戏日期，防止前端传错
+    data = body.model_dump()
+    data["date"] = _current_game_date()
+    cfg["daily_bonus"] = data
     save_config(cfg)
-    return body
+    return DailyBonus(**data)

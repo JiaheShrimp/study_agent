@@ -199,6 +199,7 @@ interface RunState {
 
 export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => void }) {
   const totalSecs = Math.round(task.hours * 3600)
+  const startedAtRef = useRef<string>('')   // 记录实际开始时间
 
   const [phase, setPhase] = useState<Phase>('countdown')
   const stateRef = useRef<RunState>({
@@ -275,8 +276,11 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
         const today = new Date().toISOString().slice(0, 10)
         api.tasks.saveRun({
           task_id: task.id,
+          task_content: task.content,
           date: today,
           success: true,
+          started_at: startedAtRef.current,
+          ended_at: new Date().toISOString(),
           actual_seconds: Math.round(s.workedSecs),
           pause_count: s.pauseCount,
           pause_seconds: Math.round(s.pausedSecs),
@@ -303,6 +307,7 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
 
   useEffect(() => {
     if (phase !== 'running') return
+    startedAtRef.current = new Date().toISOString()  // 倒计时结束，正式开始
     lastTickRef.current = performance.now()
     rafRef.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafRef.current)
@@ -335,8 +340,11 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
     const today = new Date().toISOString().slice(0, 10)
     api.tasks.saveRun({
       task_id: task.id,
+      task_content: task.content,
       date: today,
       success: false,
+      started_at: startedAtRef.current,
+      ended_at: new Date().toISOString(),
       actual_seconds: Math.round(s.workedSecs),
       pause_count: s.pauseCount,
       pause_seconds: Math.round(s.pausedSecs),
@@ -359,18 +367,6 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
 
   if (phase === 'result') {
     const s = stateRef.current
-    const handleClose = async () => {
-      if (!s.success) {
-        const today = new Date().toISOString().slice(0, 10)
-        await api.tasks.saveRun({
-          task_id: task.id, date: today, success: false,
-          actual_seconds: Math.round(s.workedSecs),
-          pause_count: s.pauseCount,
-          pause_seconds: Math.round(s.pausedSecs),
-        }).catch(() => {})
-      }
-      onClose()
-    }
     return (
       <ResultPage
         task={task}
@@ -378,7 +374,7 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
         actualSeconds={Math.round(s.workedSecs)}
         pauseCount={s.pauseCount}
         pauseSeconds={Math.round(s.pausedSecs)}
-        onClose={handleClose}
+        onClose={onClose}
       />
     )
   }

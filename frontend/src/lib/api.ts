@@ -103,8 +103,16 @@ export const api = {
     generateBounties: () => post<DailyBounty[]>('/tasks/bounty/daily/generate', {}),
     respondBounty: (id: string, status: 'accepted' | 'skipped') =>
       post<DailyBounty>(`/tasks/bounty/daily/${id}?status=${status}`, {}, 'PATCH'),
-    saveRun: (r: { task_id: string; date: string; success: boolean; actual_seconds: number; pause_count: number; pause_seconds: number }) =>
-      post<typeof r>('/tasks/run', r),
+    saveRun: (r: {
+      task_id: string; task_content: string; date: string; success: boolean
+      started_at: string; ended_at: string
+      actual_seconds: number; pause_count: number; pause_seconds: number
+    }) => post<typeof r>('/tasks/run', r),
+    runs: (date?: string) => get<{
+      task_id: string; task_content: string; date: string; success: boolean
+      started_at: string; ended_at: string
+      actual_seconds: number; pause_count: number; pause_seconds: number
+    }[]>(`/tasks/runs${date ? `?date=${date}` : ''}`),
   },
   bonus: {
     today: () => get<DailyBonus | null>('/bonus/today'),
