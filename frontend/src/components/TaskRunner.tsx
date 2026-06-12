@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { api, type DailyTask } from '@/lib/api'
-import { cn } from '@/lib/utils'
-
-// ── 常量 ─────────────────────────────────────────────────────
-const WORK_SECS  = 30 * 60   // 30 分钟工作
-const REST_SECS  = 5  * 60   // 5 分钟休息（暂停时消耗）
+import { api, type DailyTask, type ScoreBreakdown } from '@/lib/api'
+import { cn, gameToday } from '@/lib/utils'
 
 // ── 工具 ─────────────────────────────────────────────────────
 function fmt(s: number) {
@@ -14,7 +10,14 @@ function fmt(s: number) {
 }
 
 // ── 倒计时弹窗 ────────────────────────────────────────────────
-function Countdown({ onDone }: { onDone: () => void }) {
+function Countdown({ onDone, task, restBudgetSecs, workMins, restMins, isResume }: {
+  onDone: () => void
+  task: { content: string; hours: number }
+  restBudgetSecs: number
+  workMins: number
+  restMins: number
+  isResume?: boolean
+}) {
   const [n, setN] = useState(3)
 
   useEffect(() => {
@@ -23,10 +26,30 @@ function Countdown({ onDone }: { onDone: () => void }) {
     return () => clearTimeout(t)
   }, [n])
 
+  const totalSecs = Math.round(task.hours * 3600)
+  const workH = Math.floor(totalSecs / 3600)
+  const workM = Math.floor((totalSecs % 3600) / 60)
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 backdrop-blur-sm">
-      <div className="text-center">
-        <p className="text-xs font-medium text-white/70 uppercase tracking-widest mb-4">任务开始</p>
+      <div className="text-center space-y-5">
+        <p className="text-xs font-medium text-white/70 uppercase tracking-widest">
+          {isResume ? '继续任务' : '任务开始'}
+        </p>
+
+        {/* 任务信息卡 */}
+        <div className="bg-white/10 backdrop-blur rounded-2xl px-6 py-4 space-y-1 text-white">
+          <p className="text-sm font-semibold">{task.content}</p>
+          <div className="flex items-center justify-center gap-4 text-xs text-white/70 mt-1">
+            <span>⏱ 任务时长 {workH > 0 ? `${workH}h ` : ''}{workM > 0 ? `${workM}m` : `${totalSecs}s`}</span>
+            <span>💤 每 {workMins}m 休息 {restMins}m</span>
+          </div>
+          {isResume
+            ? <p className="text-[11px] text-white/50 mt-1">从上次进度继续，已有休息预算保留</p>
+            : <p className="text-[11px] text-white/50 mt-1">初始休息预算 {restMins}m，每完成一段工作追加</p>
+          }
+        </div>
+
         <div
           key={n}
           className="text-9xl font-black text-white animate-in zoom-in-50 fade-in duration-200"
@@ -38,115 +61,240 @@ function Countdown({ onDone }: { onDone: () => void }) {
   )
 }
 
-// ── 跑道组件 ──────────────────────────────────────────────────
-// runnerPct: 0-100，小人位置
-// monsterPct: 0-100，怪兽位置（从后追）
-// restPct: 0-100，休息时间剩余百分比
+// ── 圆形跑道组件 ─────────────────────────────────────────────
+// 小人和怪兽沿圆环跑道运动，进度对应圆弧角度
 function Track({
   runnerPct,
   monsterPct,
-  restPct,
+  restSecsLeft,
+  totalRestBudget,
   paused,
   isResting,
+  frame,
 }: {
   runnerPct: number
   monsterPct: number
-  restPct: number
+  restSecsLeft: number
+  totalRestBudget: number
   paused: boolean
   isResting: boolean
+  frame: number
 }) {
-  const gap = runnerPct - monsterPct  // 差距，越小越危险
+  const SIZE = 280        // SVG 尺寸
+  const CX = SIZE / 2     // 圆心
+  const CY = SIZE / 2
+  const R = 108           // 跑道半径
+  const STROKE = 14       // 跑道宽度
+
+  const gap = runnerPct - monsterPct
+  const danger = gap < 15
+
+  // 把百分比转成圆周上的坐标（从顶部 -90° 顺时针）
+  function pctToXY(pct: number, r = R) {
+    const angle = (pct / 100) * 2 * Math.PI - Math.PI / 2
+    return {
+      x: CX + r * Math.cos(angle),
+      y: CY + r * Math.sin(angle),
+    }
+  }
+
+  // 圆弧路径（用于进度弧）
+  function arcPath(fromPct: number, toPct: number, r = R) {
+    const start = pctToXY(fromPct, r)
+    const end   = pctToXY(toPct, r)
+    const span  = toPct - fromPct
+    const large = span > 50 ? 1 : 0
+    return `M ${start.x} ${start.y} A ${r} ${r} 0 ${large} 1 ${end.x} ${end.y}`
+  }
+
+  const runnerPos  = pctToXY(Math.min(runnerPct, 99))
+  const monsterPos = pctToXY(Math.max(0, monsterPct))
+  const restPct    = totalRestBudget > 0 ? restSecsLeft / totalRestBudget : 1
+  const restM      = Math.floor(restSecsLeft / 60)
+  const restS      = Math.floor(restSecsLeft % 60)
+
+  // 跑步动画：emoji 在奇偶帧间交替
+  const runnerEmoji  = paused ? '🧍' : isResting ? '🚶' : (frame % 4 < 2 ? '🏃' : '🏃')
+  const monsterEmoji = danger ? (frame % 4 < 2 ? '👾' : '👾') : '🐲'
 
   return (
-    <div className="w-full space-y-3">
-      {/* 跑道主体 */}
-      <div className="relative h-20 rounded-2xl bg-secondary/60 border border-border overflow-hidden">
-        {/* 地面线 */}
-        <div className="absolute bottom-5 inset-x-0 h-px bg-border/60" />
-
-        {/* 终点旗 */}
-        <div className="absolute right-3 bottom-4 text-xl select-none">🏁</div>
-
-        {/* 怪兽 */}
-        <div
-          className="absolute bottom-4 text-2xl select-none transition-none"
-          style={{
-            left: `${Math.max(0, monsterPct)}%`,
-            transform: 'translateX(-50%)',
-            filter: gap < 15 ? 'drop-shadow(0 0 6px rgba(239,68,68,0.8))' : 'none',
-            transition: 'left 0.3s linear, filter 0.5s',
-          }}
-        >
-          {gap < 10 ? '👾' : gap < 20 ? '🐺' : '🐲'}
-        </div>
-
-        {/* 小人 */}
-        <div
-          className="absolute bottom-4 text-2xl select-none"
-          style={{
-            left: `${Math.min(96, runnerPct)}%`,
-            transform: 'translateX(-50%)',
-            transition: 'left 0.3s linear',
-          }}
-        >
-          {paused ? '🧍' : isResting ? '🚶' : '🏃'}
-        </div>
-
-        {/* 暂停时的危险光晕 */}
-        {paused && (
-          <div className="absolute inset-0 bg-rose-500/5 animate-pulse pointer-events-none" />
-        )}
-      </div>
-
-      {/* 休息时间条（暂停时消耗） */}
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] text-muted-foreground shrink-0 w-16">
-          {paused ? '⚠️ 暂停中' : isResting ? '😴 休息中' : '💨 冲刺中'}
-        </span>
-        <div className="flex-1 h-2 rounded-full bg-secondary overflow-hidden">
-          <div
-            className={cn(
-              'h-full rounded-full transition-all duration-1000',
-              restPct > 50 ? 'bg-green-400' :
-              restPct > 25 ? 'bg-amber-400' : 'bg-rose-500'
-            )}
-            style={{ width: `${restPct}%` }}
+    <div className="flex flex-col items-center gap-4">
+      {/* 圆形跑道 */}
+      <div className="relative" style={{ width: SIZE, height: SIZE }}>
+        <svg width={SIZE} height={SIZE}>
+          {/* 跑道底色 */}
+          <circle
+            cx={CX} cy={CY} r={R}
+            fill="none"
+            stroke="hsl(var(--secondary))"
+            strokeWidth={STROKE}
           />
-        </div>
-        <span className="text-[11px] text-muted-foreground shrink-0 w-10 text-right">
-          {Math.round(restPct)}%
-        </span>
+
+          {/* 完成进度弧（小人走过的路） */}
+          {runnerPct > 0.5 && (
+            <path
+              d={arcPath(0, Math.min(runnerPct, 99.9))}
+              fill="none"
+              stroke={danger && paused ? '#fca5a5' : 'hsl(var(--primary))'}
+              strokeWidth={STROKE}
+              strokeLinecap="round"
+              style={{ transition: 'stroke 0.5s' }}
+            />
+          )}
+
+          {/* 刻度点（每10%一个） */}
+          {Array.from({ length: 10 }).map((_, i) => {
+            const pos = pctToXY(i * 10)
+            return (
+              <circle key={i} cx={pos.x} cy={pos.y} r={2}
+                fill="hsl(var(--background))" opacity={0.6} />
+            )
+          })}
+
+          {/* 终点旗标记（100% = 顶部） */}
+          <text
+            x={CX} y={CY - R - STROKE / 2 - 4}
+            textAnchor="middle" fontSize={16} dominantBaseline="auto"
+          >🏁</text>
+
+          {/* 怪兽 */}
+          <text
+            x={monsterPos.x} y={monsterPos.y}
+            textAnchor="middle" dominantBaseline="middle"
+            fontSize={danger ? 20 : 18}
+            style={{ transition: 'all 0.4s linear', filter: danger ? 'drop-shadow(0 0 4px #ef4444)' : 'none' }}
+          >
+            {monsterEmoji}
+          </text>
+
+          {/* 小人 */}
+          <text
+            x={runnerPos.x} y={runnerPos.y}
+            textAnchor="middle" dominantBaseline="middle"
+            fontSize={20}
+            style={{ transition: paused ? 'none' : 'all 0.4s linear' }}
+          >
+            {runnerEmoji}
+          </text>
+
+          {/* 中央信息 */}
+          <text x={CX} y={CY - 22} textAnchor="middle" fontSize={11}
+            fill="hsl(var(--muted-foreground))">
+            {paused ? '⚠ 暂停' : isResting ? '😴 休息' : '💨 冲刺'}
+          </text>
+
+          {/* 休息剩余时间 */}
+          <text x={CX} y={CY + 4} textAnchor="middle" fontSize={22}
+            fontWeight="bold" fontFamily="monospace"
+            fill={restSecsLeft < 60 ? '#ef4444' : restSecsLeft < 120 ? '#f59e0b' : 'hsl(var(--foreground))'}>
+            {restM}:{restS.toString().padStart(2, '0')}
+          </text>
+
+          {/* 休息预算标签 */}
+          <text x={CX} y={CY + 24} textAnchor="middle" fontSize={10}
+            fill="hsl(var(--muted-foreground))">
+            休息预算
+          </text>
+
+          {/* 外圈休息预算弧（细圈，显示剩余比例） */}
+          {restPct > 0.01 && (
+            <path
+              d={arcPath(0, restPct * 100, R + STROKE)}
+              fill="none"
+              stroke={restSecsLeft < 60 ? '#ef4444' : restSecsLeft < 120 ? '#f59e0b' : '#4ade80'}
+              strokeWidth={4}
+              strokeLinecap="round"
+              opacity={0.7}
+            />
+          )}
+          <circle cx={CX} cy={CY} r={R + STROKE}
+            fill="none" stroke="hsl(var(--border))" strokeWidth={4} opacity={0.3} />
+        </svg>
+
+        {/* 暂停危险光晕 */}
+        {paused && danger && (
+          <div className="absolute inset-0 rounded-full bg-rose-500/5 animate-pulse pointer-events-none" />
+        )}
       </div>
     </div>
   )
 }
 
 // ── 结果页 ────────────────────────────────────────────────────
+// endReason: 'complete'=跑到终点, 'early'=提前完成, 'giveup'=中断, 'failed'=被追上
+type EndReason = 'complete' | 'early' | 'giveup' | 'failed'
+
 function ResultPage({
   task,
-  success,
+  endReason,
   actualSeconds,
   pauseCount,
   pauseSeconds,
+  workedPct,
+  scoreBreakdown,
   onClose,
 }: {
   task: DailyTask
-  success: boolean
+  endReason: EndReason
   actualSeconds: number
   pauseCount: number
   pauseSeconds: number
+  workedPct: number
+  scoreBreakdown: ScoreBreakdown | null
   onClose: () => void
 }) {
+  const success = endReason === 'complete' || endReason === 'early'
+
+  const RESULT_INFO: Record<EndReason, { emoji: string; title: string; note?: string; barClass: string }> = {
+    complete: { emoji: '🏆', title: '任务完成！', barClass: 'from-green-300 to-emerald-400' },
+    early:    { emoji: '⚡', title: '提前完成！', note: '你比计划更快完成了任务。', barClass: 'from-sky-300 to-blue-400' },
+    giveup:   { emoji: '🚩', title: '中断任务', note: `已完成 ${workedPct.toFixed(0)}%，本次记录已保存。`, barClass: 'from-amber-300 to-orange-400' },
+    failed:   { emoji: '💀', title: '被追上了…', note: '休息时间耗尽，怪兽追上了你。', barClass: 'from-rose-400 to-red-500' },
+  }
+
+  const info = RESULT_INFO[endReason]
+
+  const bonusItems = scoreBreakdown ? [
+    scoreBreakdown.bonus_no_pause > 1   && { label: '零暂停', value: `×${scoreBreakdown.bonus_no_pause}` },
+    scoreBreakdown.bonus_few_pause > 1  && { label: '少暂停', value: `×${scoreBreakdown.bonus_few_pause}` },
+    scoreBreakdown.bonus_rest_saved > 1 && { label: '省休息', value: `×${scoreBreakdown.bonus_rest_saved}` },
+    scoreBreakdown.bonus_early > 1      && { label: '提前完', value: `×${scoreBreakdown.bonus_early}` },
+    scoreBreakdown.multiplier !== 1     && { label: '今日倍数', value: `×${scoreBreakdown.multiplier}` },
+  ].filter(Boolean) as { label: string; value: string }[] : []
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 backdrop-blur-sm">
       <div className="w-full max-w-sm mx-4 bg-card rounded-3xl border border-border shadow-2xl overflow-hidden">
-        <div className={cn('h-1.5', success ? 'bg-gradient-to-r from-green-300 to-emerald-400' : 'bg-gradient-to-r from-rose-400 to-red-500')} />
-        <div className="p-7 space-y-6 text-center">
+        <div className={cn('h-1.5 bg-gradient-to-r', info.barClass)} />
+        <div className="p-7 space-y-5 text-center">
           <div>
-            <div className="text-5xl mb-3">{success ? '🏆' : '💀'}</div>
-            <h2 className="text-xl font-bold">{success ? '任务完成！' : '被追上了…'}</h2>
+            <div className="text-5xl mb-3">{info.emoji}</div>
+            <h2 className="text-xl font-bold">{info.title}</h2>
             <p className="text-sm text-muted-foreground mt-1">{task.content}</p>
           </div>
+
+          {/* 得分展示（仅成功时） */}
+          {success && scoreBreakdown && (
+            <div className="rounded-2xl bg-primary/5 border border-primary/20 px-4 py-4 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">获得点数</span>
+                <span className="text-2xl font-black text-primary tabular-nums">+{scoreBreakdown.total}</span>
+              </div>
+              <div className="h-px bg-border" />
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>基础分 {scoreBreakdown.base}</span>
+                {bonusItems.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                    {bonusItems.map(b => (
+                      <span key={b.label} className="bg-primary/10 text-primary px-1.5 py-0.5 rounded-md font-medium">
+                        {b.label} {b.value}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-3 gap-3">
             {[
@@ -161,9 +309,12 @@ function ResultPage({
             ))}
           </div>
 
-          {!success && (
-            <p className="text-xs text-muted-foreground bg-rose-50 rounded-xl p-3 text-rose-700">
-              休息时间耗尽，怪兽追上了你。任务未计入完成。
+          {info.note && (
+            <p className={cn(
+              'text-xs rounded-xl p-3',
+              success ? 'bg-sky-50 text-sky-700' : endReason === 'giveup' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'
+            )}>
+              {info.note}
             </p>
           )}
 
@@ -182,6 +333,7 @@ function ResultPage({
 // ── 主组件 ────────────────────────────────────────────────────
 type Phase = 'countdown' | 'running' | 'result'
 
+
 interface RunState {
   workSecsLeft: number    // 当前工作段剩余秒
   restSecsLeft: number    // 当前休息/暂停预算剩余秒
@@ -197,28 +349,80 @@ interface RunState {
   ended: boolean
 }
 
-export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => void }) {
+export function TaskRunner({
+  task,
+  onClose,
+  workMins = 30,
+  restMins = 5,
+  multiplier = 1.0,
+  initialWorkedSecs = 0,
+}: {
+  task: DailyTask
+  onClose: () => void
+  workMins?: number
+  restMins?: number
+  multiplier?: number
+  initialWorkedSecs?: number
+}) {
+  const WORK_SECS = workMins * 60
+  const REST_SECS = restMins * 60
+
   const totalSecs = Math.round(task.hours * 3600)
   const startedAtRef = useRef<string>('')   // 记录实际开始时间
 
+  // 从上次暂停进度继续时的初始状态
+  const initProgress = Math.min(initialWorkedSecs, totalSecs - 1)
+  const initRunnerPct = initProgress > 0 ? 2 + (initProgress / totalSecs) * 90 : 2
+  const initRestBudget = initProgress > 0
+    ? REST_SECS * Math.ceil(initProgress / WORK_SECS + 1)
+    : REST_SECS
+
   const [phase, setPhase] = useState<Phase>('countdown')
+  const [endReason, setEndReason] = useState<EndReason>('complete')
+  const [scoreBreakdown, setScoreBreakdown] = useState<ScoreBreakdown | null>(null)
+  const [frame, setFrame] = useState(0)
   const stateRef = useRef<RunState>({
     workSecsLeft: WORK_SECS,
-    restSecsLeft: REST_SECS,
-    totalRestBudget: REST_SECS,
-    workedSecs: 0,
+    restSecsLeft: initRestBudget,
+    totalRestBudget: initRestBudget,
+    workedSecs: initProgress,
     pausedSecs: 0,
     pauseCount: 0,
     paused: false,
     isResting: false,
-    runnerPct: 2,
-    monsterPct: 0,
+    runnerPct: initRunnerPct,
+    monsterPct: Math.max(0, initRunnerPct - 25),
     success: false,
     ended: false,
   })
   const [display, setDisplay] = useState({ ...stateRef.current })
   const rafRef = useRef<number>(0)
   const lastTickRef = useRef<number>(0)
+
+  function finishRun(s: RunState, reason: EndReason) {
+    const today = gameToday()
+    api.tasks.saveRun({
+      task_id: task.id,
+      task_content: task.content,
+      date: today,
+      success: reason === 'complete' || reason === 'early',
+      started_at: startedAtRef.current,
+      ended_at: new Date().toISOString(),
+      actual_seconds: Math.round(s.workedSecs),
+      pause_count: s.pauseCount,
+      pause_seconds: Math.round(s.pausedSecs),
+      task_hours: task.hours,
+      task_stars: task.stars,
+      end_reason: reason,
+      rest_remaining_secs: Math.round(s.restSecsLeft),
+      multiplier,
+    }).then(res => setScoreBreakdown(res.score_breakdown)).catch(() => {})
+    setEndReason(reason)
+    setPhase('result')
+  }
+
+  const workSecsConst = WORK_SECS
+  const restSecsConst = REST_SECS
 
   const tick = useCallback(() => {
     const now = performance.now()
@@ -242,7 +446,7 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
         s.ended = true
         s.success = false
         setDisplay({ ...s })
-        setPhase('result')
+        finishRun(s, 'failed')
         return
       }
     } else if (s.isResting) {
@@ -263,7 +467,7 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
       s.monsterPct += (targetMonster - s.monsterPct) * delta * 0.05
 
       // 累计工作时间增加休息预算
-      s.totalRestBudget = REST_SECS * Math.ceil(s.workedSecs / WORK_SECS + 1)
+      s.totalRestBudget = restSecsConst * Math.ceil(s.workedSecs / workSecsConst + 1)
 
       // 到达终点
       if (s.workedSecs >= totalSecs) {
@@ -271,47 +475,38 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
         s.success = true
         s.runnerPct = 96
         setDisplay({ ...s })
-
-        // 保存结果
-        const today = new Date().toISOString().slice(0, 10)
-        api.tasks.saveRun({
-          task_id: task.id,
-          task_content: task.content,
-          date: today,
-          success: true,
-          started_at: startedAtRef.current,
-          ended_at: new Date().toISOString(),
-          actual_seconds: Math.round(s.workedSecs),
-          pause_count: s.pauseCount,
-          pause_seconds: Math.round(s.pausedSecs),
-        }).catch(() => {})
-
-        setPhase('result')
+        finishRun(s, 'complete')
         return
       }
 
-      // 工作 30 分钟后进入休息段
+      // 工作段结束后进入休息段
       if (s.workSecsLeft <= 0) {
         s.isResting = true
-        s.workSecsLeft = WORK_SECS  // 重置下一个工作段
-        // 休息 5 分钟后自动继续（用 setTimeout）
+        s.workSecsLeft = workSecsConst  // 重置下一个工作段
         setTimeout(() => {
           stateRef.current.isResting = false
-        }, REST_SECS * 1000)
+        }, restSecsConst * 1000)
       }
     }
 
     setDisplay({ ...s })
     rafRef.current = requestAnimationFrame(tick)
-  }, [totalSecs, task.id])
+  }, [totalSecs, task.id, workSecsConst, restSecsConst])
 
   useEffect(() => {
     if (phase !== 'running') return
-    startedAtRef.current = new Date().toISOString()  // 倒计时结束，正式开始
+    startedAtRef.current = new Date().toISOString()
     lastTickRef.current = performance.now()
     rafRef.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafRef.current)
   }, [phase, tick])
+
+  // 像素动画帧计数，每 200ms +1
+  useEffect(() => {
+    if (phase !== 'running') return
+    const id = setInterval(() => setFrame(f => f + 1), 200)
+    return () => clearInterval(id)
+  }, [phase])
 
   function handlePause() {
     const s = stateRef.current
@@ -336,33 +531,24 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
     s.ended = true
     s.success = false
     cancelAnimationFrame(rafRef.current)
-
-    const today = new Date().toISOString().slice(0, 10)
-    api.tasks.saveRun({
-      task_id: task.id,
-      task_content: task.content,
-      date: today,
-      success: false,
-      started_at: startedAtRef.current,
-      ended_at: new Date().toISOString(),
-      actual_seconds: Math.round(s.workedSecs),
-      pause_count: s.pauseCount,
-      pause_seconds: Math.round(s.pausedSecs),
-    }).catch(() => {})
-
     setDisplay({ ...s })
-    setPhase('result')
+    finishRun(s, 'giveup')
   }
 
-  // 休息时间剩余百分比
-  const restPct = display.totalRestBudget > 0
-    ? (display.restSecsLeft / display.totalRestBudget) * 100
-    : 100
+  function handleEarlyFinish() {
+    const s = stateRef.current
+    s.ended = true
+    s.success = true
+    s.runnerPct = 96
+    cancelAnimationFrame(rafRef.current)
+    setDisplay({ ...s })
+    finishRun(s, 'early')
+  }
 
   const workedPct = Math.min(100, (display.workedSecs / totalSecs) * 100)
 
   if (phase === 'countdown') {
-    return <Countdown onDone={() => setPhase('running')} />
+    return <Countdown onDone={() => setPhase('running')} task={task} restBudgetSecs={REST_SECS} workMins={workMins} restMins={restMins} isResume={initialWorkedSecs > 0} />
   }
 
   if (phase === 'result') {
@@ -370,10 +556,12 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
     return (
       <ResultPage
         task={task}
-        success={s.success}
+        endReason={endReason}
         actualSeconds={Math.round(s.workedSecs)}
         pauseCount={s.pauseCount}
         pauseSeconds={Math.round(s.pausedSecs)}
+        workedPct={Math.min(100, (s.workedSecs / totalSecs) * 100)}
+        scoreBreakdown={scoreBreakdown}
         onClose={onClose}
       />
     )
@@ -394,7 +582,7 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
       </div>
 
       {/* 主内容区 */}
-      <div className="flex-1 flex flex-col justify-center px-6 space-y-8">
+      <div className="flex-1 flex flex-col items-center justify-center px-6 gap-5">
 
         {/* 时间显示 */}
         <div className="text-center space-y-1">
@@ -404,17 +592,19 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
           <p className="text-xs text-muted-foreground">剩余时间</p>
         </div>
 
-        {/* 跑道 */}
+        {/* 圆形跑道 */}
         <Track
           runnerPct={display.runnerPct}
           monsterPct={display.monsterPct}
-          restPct={restPct}
+          restSecsLeft={display.restSecsLeft}
+          totalRestBudget={display.totalRestBudget}
           paused={display.paused}
           isResting={display.isResting}
+          frame={frame}
         />
 
         {/* 小数据 */}
-        <div className="grid grid-cols-3 gap-3 text-center">
+        <div className="grid grid-cols-3 gap-3 text-center w-full max-w-xs">
           <div>
             <p className="text-xs text-muted-foreground">工作时长</p>
             <p className="text-sm font-bold tabular-nums">{fmt(Math.round(display.workedSecs))}</p>
@@ -443,12 +633,20 @@ export function TaskRunner({ task, onClose }: { task: DailyTask; onClose: () => 
         >
           {display.paused ? '▶ 继续冲刺' : '⏸ 暂停'}
         </button>
-        <button
-          onClick={handleGiveUp}
-          className="w-full h-10 rounded-2xl text-sm text-muted-foreground hover:text-rose-500 transition-colors"
-        >
-          放弃任务
-        </button>
+        <div className="flex gap-3">
+          <button
+            onClick={handleEarlyFinish}
+            className="flex-1 h-10 rounded-2xl text-sm font-medium text-sky-600 border border-sky-200 bg-sky-50 hover:bg-sky-100 transition-colors"
+          >
+            ⚡ 提前完成
+          </button>
+          <button
+            onClick={handleGiveUp}
+            className="flex-1 h-10 rounded-2xl text-sm text-muted-foreground hover:text-rose-500 border border-border hover:border-rose-200 transition-colors"
+          >
+            中断任务
+          </button>
+        </div>
       </div>
     </div>
   )

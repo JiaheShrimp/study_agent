@@ -46,11 +46,19 @@ def make_icon() -> Image.Image:
 
 _procs: list[subprocess.Popen] = []
 
+LOG_DIR = os.path.join(ROOT, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+def _logfile(name: str):
+    return open(os.path.join(LOG_DIR, name), "a", encoding="utf-8")
+
 def start_backend() -> subprocess.Popen:
     return subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "main:app", "--port", "8000"],
         cwd=BACKEND,
         creationflags=subprocess.CREATE_NO_WINDOW,
+        stdout=_logfile("backend.log"),
+        stderr=_logfile("backend.log"),
     )
 
 def start_frontend() -> subprocess.Popen:
@@ -59,13 +67,46 @@ def start_frontend() -> subprocess.Popen:
         [npm, "run", "dev"],
         cwd=FRONTEND,
         creationflags=subprocess.CREATE_NO_WINDOW,
+        stdout=_logfile("frontend.log"),
+        stderr=_logfile("frontend.log"),
     )
 
+def _wait_backend(timeout: int = 30) -> bool:
+    import urllib.request
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            urllib.request.urlopen("http://localhost:8000/api/bonus/today", timeout=2)
+            return True
+        except Exception:
+            time.sleep(1)
+    return False
+
 def wait_and_open(seconds: int = 3) -> None:
-    time.sleep(seconds)
+    time.sleep(seconds)          # 先等前端 vite 编译
+    _wait_backend(timeout=30)    # 再等后端就绪
     webbrowser.open(APP_URL)
 
+def _kill_port(port: int) -> None:
+    """结束占用指定端口的进程（Windows netstat）"""
+    try:
+        out = subprocess.check_output(
+            f'netstat -ano | findstr :{port}',
+            shell=True, text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 5 and f':{port}' in parts[1] and parts[3] == 'LISTENING':
+                pid = int(parts[4])
+                subprocess.call(f'taskkill /F /PID {pid}', shell=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
 def launch_all() -> None:
+    _kill_port(8000)
+    _kill_port(5173)
+    time.sleep(0.5)
     _procs.append(start_backend())
     _procs.append(start_frontend())
     threading.Thread(target=wait_and_open, daemon=True).start()

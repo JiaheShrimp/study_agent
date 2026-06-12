@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type DailyBonus } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, gameToday } from '@/lib/utils'
+import { playSlotTick, playReelStop, playSlotComplete, playClick } from '@/lib/sounds'
 
 // ── 概率表：1最多，5极少，最终倍数 = 平均值映射到 1.0-3.0 ──
 const WEIGHTS = [0, 40, 28, 18, 9, 5]
@@ -56,6 +57,7 @@ function Reel({
   const posRef = useRef(0)
   const stoppingRef = useRef(false)
   const stoppedRef = useRef(false)
+  const lastCellRef = useRef(-1)
 
   const TOTAL = CELL_H * REEL_NUMS.length
 
@@ -66,6 +68,7 @@ function Reel({
     stoppingRef.current = false
     stoppedRef.current = false
     velRef.current = 0
+    lastCellRef.current = -1
     // 每个轮从不同起始位置开始，视觉上错开
     posRef.current = REEL_OFFSETS[reelIndex] * CELL_H
 
@@ -84,6 +87,13 @@ function Reel({
       posRef.current = (posRef.current + velRef.current) % TOTAL
       setTranslateY(posRef.current)
 
+      // 每滚过一格播放一次 tick
+      const currentCell = Math.floor(posRef.current / CELL_H)
+      if (currentCell !== lastCellRef.current) {
+        lastCellRef.current = currentCell
+        if (!stoppingRef.current) playSlotTick()
+      }
+
       if (stoppingRef.current && velRef.current === 0) {
         // 找目标值在 REEL_NUMS 中最近的索引，snap 过去
         // 选择在当前位置之后最近的目标格，保证视觉连续
@@ -98,6 +108,7 @@ function Reel({
         setTranslateY(snapY)
         stoppedRef.current = true
         setStopped(true)
+        playReelStop(reelIndex)
         onStopped()
         return
       }
@@ -181,6 +192,7 @@ export function SlotMachine({ onComplete, onSkip }: Props) {
   const multiplier = phase === 'done' ? calcMultiplier(rolls) : null
 
   function handleSpin() {
+    playClick()
     const r = rollThree()
     setRolls(r)
     setStoppedCount(0)
@@ -190,22 +202,29 @@ export function SlotMachine({ onComplete, onSkip }: Props) {
   function handleReelStop() {
     setStoppedCount(c => {
       const next = c + 1
-      if (next === 3) setPhase('done')
+      if (next === 3) {
+        setPhase('done')
+        // 稍延迟等最后一个 reelStop 音播完
+        setTimeout(() => playSlotComplete(calcMultiplier(rolls)), 250)
+      }
       return next
     })
   }
 
   async function handleConfirm() {
-    if (!multiplier) return
+    if (!multiplier || saving) return
+    playClick()
     setSaving(true)
-    const today = new Date().toISOString().slice(0, 10)
+    const today = gameToday()
     const bonus: DailyBonus = { date: today, rolls, multiplier }
     try {
       await api.bonus.save(bonus)
-      onComplete(bonus)
+    } catch {
+      // 保存失败忽略，下次打开会重新抽一次
     } finally {
       setSaving(false)
     }
+    onComplete(bonus)
   }
 
   const label =

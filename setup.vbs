@@ -4,4 +4,5 @@ appPath = scriptDir & "app.py"
 
 Dim ws
 Set ws = CreateObject("WScript.Shell")
-ws.Run "pythonw " & Chr(34) & appPath & Chr(34), 0, False
+ws.Run Chr(34) & "D:\Downloads\Miniconda\python.exe" & Chr(34) & " " & Chr(34) & appPath & Chr(34), 0, False
+

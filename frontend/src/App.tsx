@@ -6,6 +6,7 @@ import { Wins } from '@/pages/Wins'
 import { Plan } from '@/pages/Placeholder'
 import { Tasks } from '@/pages/Tasks'
 import { TasksManage } from '@/pages/TasksManage'
+import { Settings } from '@/pages/Settings'
 import { SlotMachine } from '@/components/SlotMachine'
 import { api, type DailyBonus } from '@/lib/api'
 
@@ -25,8 +26,7 @@ export default function App() {
         setShowSlot(true)
       }
     }).catch(() => {
-      // 后端未就绪，仍然弹老虎机（离线状态下可跳过）
-      setShowSlot(true)
+      // 后端未就绪，不弹老虎机，等后端启动后再正常显示
     })
   }, [])
 
@@ -44,6 +44,7 @@ export default function App() {
           <Route path="tasks" element={<Tasks />} />
           <Route path="tasks/manage" element={<TasksManage />} />
           <Route path="plan" element={<Plan />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
 

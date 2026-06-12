@@ -46,6 +46,7 @@
   .win-small  { @apply bg-amber-50 text-amber-700 border border-amber-200/80; }
   .win-medium { @apply bg-orange-50 text-orange-700 border border-orange-200/80; }
   .win-big    { @apply bg-rose-50 text-rose-700 border border-rose-200/80; }
+  .win-future { @apply bg-indigo-50 text-indigo-600 border border-indigo-200/80; }
 
   /* 纸质纹理背景 */
   .paper {

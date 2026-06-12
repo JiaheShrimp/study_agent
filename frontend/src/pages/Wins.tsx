@@ -3,7 +3,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recha
 import { ChevronLeft, ChevronRight, BarChart2, X, Trash2, Plus, Bell, BellOff } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, type Win, type WinStats, type ReminderConfig } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, gameToday } from '@/lib/utils'
+import { playWinRecord, playClick } from '@/lib/sounds'
 
 // ── 常量 ─────────────────────────────────────────────────────
 
@@ -11,6 +12,7 @@ const LEVELS: { value: Win['win_level']; label: string; short: string; cls: stri
   { value: 'small',  label: '小赢',   short: '★',   cls: 'win-small'  },
   { value: 'medium', label: '中赢',   short: '★★',  cls: 'win-medium' },
   { value: 'big',    label: '特大赢', short: '★★★', cls: 'win-big'    },
+  { value: 'future', label: '未来可赢', short: '◇', cls: 'win-future' },
 ]
 const LEVEL_MAP = Object.fromEntries(LEVELS.map(l => [l.value, l])) as Record<Win['win_level'], typeof LEVELS[0]>
 
@@ -21,7 +23,7 @@ function firstWeekday(y: number, m: number) { return new Date(y, m, 1).getDay() 
 // ── 主页面 ───────────────────────────────────────────────────
 
 export function Wins() {
-  const today = fmt(new Date())
+  const today = gameToday()
   const [viewDate, setViewDate]   = useState(new Date())
   const [selected, setSelected]   = useState(today)
   const [byDate, setByDate]       = useState<Record<string, Win[]>>({})
@@ -58,14 +60,14 @@ export function Wins() {
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => setReminderOpen(true)}
+              onClick={() => { playClick(); setReminderOpen(true) }}
               className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg px-3 py-1.5 transition-colors hover:bg-secondary"
             >
               <Bell className="h-3.5 w-3.5" />
               提醒
             </button>
             <button
-              onClick={() => setAnalysisOpen(true)}
+              onClick={() => { playClick(); setAnalysisOpen(true) }}
               className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg px-3 py-1.5 transition-colors hover:bg-secondary"
             >
               <BarChart2 className="h-3.5 w-3.5" />
@@ -111,7 +113,9 @@ export function Wins() {
               const stars = wins.reduce((s, w) => s + w.stars, 0)
               const isToday    = key === today
               const isSelected = key === selected
-              const hasBig = wins.some(w => w.win_level === 'big')
+              const hasBig    = wins.some(w => w.win_level === 'big')
+              const hasFuture = wins.some(w => w.win_level === 'future')
+              const hasAny    = stars > 0 || hasFuture
 
               return (
                 <button
@@ -121,7 +125,7 @@ export function Wins() {
                     'relative flex flex-col items-center justify-center rounded-2xl py-2 min-h-[56px] text-xs font-medium transition-all',
                     isSelected
                       ? 'bg-primary text-primary-foreground shadow-sm'
-                      : stars > 0
+                      : hasAny
                         ? 'bg-secondary text-foreground'
                         : 'text-foreground/70 hover:bg-secondary/60',
                     isToday && !isSelected ? 'ring-1 ring-primary/50' : ''
@@ -130,10 +134,18 @@ export function Wins() {
                   <span>{d}</span>
                   {stars > 0 && (
                     <span className={cn(
-                      'text-[9px] mt-0.5 leading-none font-normal',
+                      'text-[9px] mt-0.5 leading-none font-normal flex items-center gap-0.5',
                       isSelected ? 'text-primary-foreground/80' : hasBig ? 'text-rose-500' : 'text-amber-500'
                     )}>
-                      {'●'.repeat(Math.min(stars, 3))}{stars > 3 ? '+' : ''}
+                      ★ {stars}
+                    </span>
+                  )}
+                  {stars === 0 && hasFuture && (
+                    <span className={cn(
+                      'text-[9px] mt-0.5 leading-none font-normal',
+                      isSelected ? 'text-primary-foreground/80' : 'text-indigo-400'
+                    )}>
+                      ◇
                     </span>
                   )}
                 </button>
@@ -212,6 +224,7 @@ function QuickAdd({ onAdded }: { onAdded: () => void }) {
     setSaving(true)
     try {
       await api.wins.create(trimmed, level)
+      playWinRecord(level)
       setContent('')
       setFlash(LEVEL_MAP[level].label)
       setTimeout(() => setFlash(null), 1500)
@@ -233,7 +246,7 @@ function QuickAdd({ onAdded }: { onAdded: () => void }) {
   return (
     <div className="bg-card rounded-2xl border border-border shadow-sm p-5 space-y-4">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">记录今天的赢</span>
+        <span className="text-sm font-medium">{level === 'future' ? '记录未来可赢' : '记录今天的赢'}</span>
         {flash && (
           <span className="text-xs text-muted-foreground animate-pulse">
             ✓ 已记录{flash}
@@ -267,7 +280,7 @@ function QuickAdd({ onAdded }: { onAdded: () => void }) {
           value={content}
           onChange={e => setContent(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="今天赢在哪？ — 写完按 Enter 即保存，Shift+Enter 换行"
+          placeholder={level === 'future' ? '今天没做好，但以后可以做到什么？' : '今天赢在哪？ — 写完按 Enter 即保存，Shift+Enter 换行'}
           className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-ring/40 transition-shadow leading-relaxed"
           autoFocus
         />
@@ -359,9 +372,10 @@ function AnalysisDrawer({ onClose }: { onClose: () => void }) {
               {/* 等级分布 */}
               <div className="space-y-2.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">等级分布</p>
-                {LEVELS.slice().reverse().map(l => {
-                  const count = stats.by_level[l.value]
-                  const pct = stats.total ? Math.round((count / stats.total) * 100) : 0
+                {LEVELS.filter(l => l.value !== 'future').slice().reverse().map(l => {
+                  const count = stats.by_level[l.value] ?? 0
+                  const winTotal = stats.total - (stats.by_level.future ?? 0)
+                  const pct = winTotal ? Math.round((count / winTotal) * 100) : 0
                   return (
                     <div key={l.value} className="flex items-center gap-2.5">
                       <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium w-16 text-center shrink-0', l.cls)}>
@@ -374,6 +388,15 @@ function AnalysisDrawer({ onClose }: { onClose: () => void }) {
                     </div>
                   )
                 })}
+                {(stats.by_level.future ?? 0) > 0 && (
+                  <div className="flex items-center gap-2.5 pt-1 border-t border-border/60">
+                    <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium w-16 text-center shrink-0', 'win-future')}>
+                      ◇ 未来可赢
+                    </span>
+                    <div className="flex-1" />
+                    <span className="text-xs text-muted-foreground w-5 text-right tabular-nums">{stats.by_level.future}</span>
+                  </div>
+                )}
               </div>
 
               {/* 柱状图 */}

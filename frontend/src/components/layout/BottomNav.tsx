@@ -1,12 +1,12 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Trophy, CheckSquare, BookOpen } from 'lucide-react'
+import { LayoutDashboard, Trophy, CheckSquare, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '首页' },
   { to: '/wins', icon: Trophy, label: '赢麻了' },
   { to: '/tasks', icon: CheckSquare, label: '任务' },
-  { to: '/plan', icon: BookOpen, label: '计划' },
+  { to: '/settings', icon: Settings, label: '设置' },
 ]
 
 export function BottomNav() {

@@ -5,10 +5,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import wins
-from routers import config
-from routers import bonus
-from routers import tasks
+from routers import wins, config, bonus, tasks, ai
 
 app = FastAPI(title="Learning Agent API")
 
@@ -23,7 +20,7 @@ app.include_router(wins.router)
 app.include_router(config.router)
 app.include_router(bonus.router)
 app.include_router(tasks.router)
-
+app.include_router(ai.router)
 
 @app.get("/health")
 def health():

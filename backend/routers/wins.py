@@ -8,8 +8,8 @@ from storage.records import load_wins, append_win, delete_win, save_wins
 
 router = APIRouter(prefix="/wins", tags=["wins"])
 
-WinLevel = Literal["small", "medium", "big"]
-STARS = {"small": 1, "medium": 2, "big": 3}
+WinLevel = Literal["small", "medium", "big", "future"]
+STARS = {"small": 1, "medium": 2, "big": 3, "future": 0}
 
 
 class WinCreate(BaseModel):
@@ -94,7 +94,7 @@ def win_stats(start: str | None = None, end: str | None = None):
     for w in wins:
         day = w["created_at"][:10]
         by_day[day] = by_day.get(day, 0) + w["stars"]
-    by_level = {"small": 0, "medium": 0, "big": 0}
+    by_level = {"small": 0, "medium": 0, "big": 0, "future": 0}
     for w in wins:
         by_level[w["win_level"]] += 1
 

@@ -16,7 +16,7 @@
 |------|------|------|
 | 后端语言 | Python 3.12 | Miniconda 环境 |
 | 后端框架 | FastAPI + uvicorn | REST API，热重载 |
-| AI SDK | Anthropic SDK | 待接入趋势分析 |
+| AI 客户端 | urllib（内置）| 零依赖，支持 Anthropic / OpenAI 兼容所有 provider |
 | 存储 | JSON 文件 | 后期可迁移 SQLite |
 | 前端框架 | React 19 + Vite + TypeScript | |
 | UI 组件 | shadcn/ui + Tailwind CSS v3 | 暖米白纸质感配色 |
@@ -25,6 +25,7 @@
 | 字体 | Noto Sans SC + Inter | Google Fonts CDN |
 | 桌面托盘 | pystray + Pillow | 托盘启动，无黑窗口 |
 | 通知 | winotify | Windows 原生 Toast |
+| 音效 | Web Audio API | 纯代码合成，无外部音频文件 |
 
 ---
 
@@ -39,40 +40,46 @@ agent/
 │   ├── routers/
 │   │   ├── wins.py          # 赢麻了 API（CRUD + 统计）
 │   │   ├── bonus.py         # 每日倍数抽奖 API
-│   │   ├── tasks.py         # 任务系统 API（模板/当日/赏金/执行记录）
-│   │   └── config.py        # 提醒配置 API
+│   │   ├── tasks.py         # 任务系统 API（模板/当日/赏金/执行记录/常规/目标）
+│   │   └── config.py        # 提醒 + 工作休息 + 有效时间口径 配置 API
 │   ├── storage/
 │   │   ├── records.py       # wins.json 读写
-│   │   ├── tasks.py         # 任务相关 JSON 读写
+│   │   ├── tasks.py         # 任务相关 JSON 读写（含 routines / daily_exclude / goal_state）
+│   │   ├── buffs.py         # Buff 模板定义 + random_buff()
 │   │   └── config.py        # config.json 读写
 │   └── data/                # 所有 JSON 数据文件（不上传 git）
 │       ├── wins.json
-│       ├── config.json      # 包含 reminder 设置和 daily_bonus
+│       ├── config.json      # reminder / work_mins / rest_mins / effective_time_mode
 │       ├── task_templates.json
-│       ├── daily_tasks.json
+│       ├── daily_tasks.json # 按日期分组的当日任务，含 run_status
 │       ├── bounty_pool.json
 │       ├── daily_bounties.json
-│       └── task_runs.json   # 任务执行记录（含 started_at/ended_at）
+│       ├── task_runs.json   # 任务执行记录（含 started_at/ended_at/actual_seconds/source）
+│       ├── routines.json    # 常规任务列表 + max_routines / fail_days_limit
+│       ├── daily_exclude.json  # {"YYYY-MM-DD": "排除理由"}
+│       └── goal_state.json  # 爬坡目标状态（goal_secs / streaks / params）
 ├── frontend/
 │   ├── src/
 │   │   ├── main.tsx
-│   │   ├── App.tsx          # 路由 + 老虎机逻辑（8点后触发）
+│   │   ├── App.tsx          # 路由 + 老虎机逻辑（8点后触发，后端无响应则不弹）
 │   │   ├── index.css        # 全局样式 + CSS 变量（暖米白配色）
 │   │   ├── lib/
-│   │   │   ├── api.ts       # 所有后端请求封装
+│   │   │   ├── api.ts       # 所有后端请求封装（含类型定义）
+│   │   │   ├── sounds.ts    # Web Audio API 音效合成（无外部文件）
 │   │   │   └── utils.ts     # cn() 工具
 │   │   ├── components/
 │   │   │   ├── layout/      # AppLayout（含今日倍数条）, Sidebar, BottomNav
 │   │   │   ├── ui/          # Button, Card, Dialog, Select
-│   │   │   ├── SlotMachine.tsx   # 每日抽奖老虎机弹窗
-│   │   │   ├── TaskRunner.tsx    # 任务追逐计时器（全屏）
-│   │   │   └── DayTimeline.tsx   # 今日时间轴（Dashboard 展示）
+│   │   │   ├── SlotMachine.tsx    # 每日抽奖老虎机弹窗
+│   │   │   ├── TaskRunner.tsx     # 任务追逐计时器（全屏，像素风跑道）
+│   │   │   ├── DayTimeline.tsx    # 今日时间轴（Dashboard 展示，竖排）
+│   │   │   └── StudyGoalCard.tsx  # 有效学习时间 + 爬坡目标卡片（compact / 详细）
 │   │   └── pages/
-│   │       ├── Dashboard.tsx     # 首页（统计 + 倍数卡 + 速览 + 时间轴）
-│   │       ├── Wins.tsx          # 赢麻了（月历 + 记录 + 新增 + 分析抽屉）
-│   │       ├── Tasks.tsx         # 每日任务（列表 + 快速添加 + 赏金弹窗）
-│   │       ├── TasksManage.tsx   # 任务管理（模板库 + 赏金任务库）
-│   │       └── Placeholder.tsx   # Plan 占位页
+│   │       ├── Dashboard.tsx      # 首页（问候 + 倍数卡 + 目标卡 + 功能入口 + 时间轴）
+│   │       ├── Wins.tsx           # 赢麻了（月历 + 记录 + 新增 + 分析抽屉）
+│   │       ├── Tasks.tsx          # 每日任务（日历切换历史 + 常规任务 + 当日任务 + 赏金）
+│   │       ├── TasksManage.tsx    # 任务管理（模板库 + 赏金任务库）
+│   │       └── Placeholder.tsx    # Plan 占位页
 │   ├── package.json
 │   └── vite.config.ts       # /api → localhost:8000 代理
 └── CLAUDE.md
@@ -107,16 +114,26 @@ npm run dev
 | 业务概念 | 代码命名 | 说明 |
 |----------|----------|------|
 | 今日进步记录 | `win` | 单条赢麻了记录 |
-| 进步等级 | `win_level` | `small` / `medium` / `big` |
-| 星星数 | `stars` | small=1, medium=2, big=3 |
+| 进步等级 | `win_level` | `small` / `medium` / `big` / `future` |
+| 星星数 | `stars` | small=1, medium=2, big=3, future=0 |
 | 每日倍数 | `daily_bonus` / `multiplier` | 1.0-3.0，三数平均映射 |
 | 游戏日 | game date | 以每天 **08:00** 为起点，00-07:59 属于前一天 |
 | 任务模板 | `task_template` | 每天自动复制到当日任务的模板 |
 | 当日任务 | `daily_task` | 当天的具体任务实例，可编辑 |
-| 赏金任务 | `bounty_task` | 每天随机抽取 0-3 个，可接受/跳过 |
-| 任务执行 | `task_run` | 一次 TaskRunner 的完整执行记录 |
-| 工作段 | work block | 30 分钟专注 + 5 分钟休息预算 |
-| 休息预算 | rest budget | 暂停时消耗；耗尽则失败 |
+| 赏金任务 | `bounty_task` | 每天随机抽取 0-2 个，可接受/跳过，携带 buff |
+| 常规任务 | `routine_task` | 习惯养成任务，有连续打卡/目标天数/连续失败警告，紫色主题 |
+| 任务执行 | `task_run` | 一次任务的完整执行记录（TaskRunner 或手动勾选） |
+| 执行来源 | `source` | `runner`=倒计时完成 / `manual`=直接勾选完成 |
+| 任务结果 | `run_status` | `none` / `running_failed` / `completed` |
+| 工作段 | work block | 可配置的专注时长（默认 30 分钟） |
+| 休息预算 | rest budget | 暂停时消耗；可配置（默认 5 分钟）；耗尽则失败；以剩余时间（mm:ss）显示 |
+| 结束原因 | `end_reason` | `complete`=跑到终点 / `early`=提前完成 / `giveup`=中断 / `failed`=被追上 |
+| 有效学习时间 | effective time | 实际口径（actual_seconds）或计划口径（min(actual, task_hours×3600)） |
+| 排除日 | excluded date | 手动标记不计入目标计算的日期，需填写理由 |
+| 学习目标 | goal | 爬坡机制：每日单阈值，达标+step_mins，连续未达标超限则降级 |
+| 奖励点数 | score | 每次任务完成后计算，失败/中断为 0 |
+| Buff | buff | 赏金任务必得、日常任务 20% 概率抽取的奖励加成 |
+| 补卡 | makeup | 常规任务昨天漏打、今天补上，streak 不断；需开启 `allow_makeup` |
 
 ---
 
@@ -127,41 +144,145 @@ npm run dev
 - 三个滚轮各抽 1-5（权重递减），平均值映射到 1.0-3.0×
 - 游戏日以 08:00 为界，跨午夜倍数不失效
 - 当天倍数显示在全局顶部条 + Dashboard 卡片
+- **容错**：后端无响应时不弹老虎机（不报错）；保存成功才关闭弹窗
+- **音效**：滚动 tick → 每轮停止和弦音 → 全停琶音（倍数越高越高亢）
 
 ### 赢麻了（已实现）
 - **小赢** ★：做到了一件事
 - **中赢** ★★：明显进步
 - **特大赢** ★★★：重大突破
-- 月历视图，点日期回顾；分析抽屉含柱状图 + 等级分布
+- **未来可赢** ◇：今天没做好，但以后可以做到（0 星，靛蓝配色，不计入星数统计）
+- 月历视图：有星数的日期显示 ★ N，只有未来可赢的日期显示 ◇
+- 分析抽屉：等级分布中 small/medium/big 按比例展示，future 单独列于分隔线下方
+- 记录成功时有音效，星级越高音符越多越响亮
 
 ### 每日任务（已实现）
 - 任务模板库 → 每天自动复制为当日任务
 - 快速添加：Enter / 空格 即保存，光标留在输入框
 - 每条任务有：内容、预计时长(h)、重要程度(1-5 星)
-- 赏金任务：随机弹出，可接受或跳过，带 buff 描述
+- 任务状态区分：完成（绿勾划线）/ 失败（红色划线，标注"X% · 失败·可重试"）/ 未开始
+- 失败/中断任务显示完成百分比，可直接点 ▶ 重试，成功任务不能再启动
+- **直接勾选完成**：不经过计时器直接打勾，自动按 `task_hours × 3600` 写入 `source=manual` 的 task_run，计入有效学习时间；取消勾选则删除该记录
+- **历史回溯**：Tasks 页顶部月历切换日期，历史日任务只读（不可编辑/添加/启动）
+
+### 常规任务（已实现）
+- 独立于每日任务的习惯养成模块，紫色/violet 主题区分
+- 每条常规任务有：内容、预计时长、重要程度、目标天数、是否允许补卡
+- 打卡状态：今日已完成 / 未完成；`last_done_date` 存最近打卡日期
+- 连续打卡天数（`streak`）、历史最长连续、累计完成天数
+- **streak 计算**：从 log 全量重算（`_recalc_streak`），支持任意日期写入后结果一致
+- **连续失败警告**：创建日期后连续 N 天未打卡（`fail_days_limit`，用户可设）触发强制提示；创建当天不计入失败
+- 用户可设最大同时存在的常规任务数（`max_routines`，默认 3）
+- 常规任务按习惯维度统计，不按天统计（不出现在历史任务列表）
+- **补卡机制**：新建时可开启 `allow_makeup`；今天已打卡、昨天未打卡时，卡片显示「补昨天」按钮；补完后 streak 自动连续；该机会只有一天（后天不可再补昨天）；适合可重复执行的习惯，不适合每天只能做一次的习惯
 
 ### 任务追踪（已实现）
-- hover 任务 → ▶ 开始 → 3-2-1 倒计时 → 全屏追逐跑道
-- 🏃 向右冲刺，🐲 在后追赶
-- 暂停时：🏃 停止，🐲 逼近，消耗休息预算
-- 休息预算耗尽 → 失败（任务无效）；到达终点 → 完成 + 自动打勾
-- 结果页记录：实际用时、暂停次数、总暂停时长
+- hover 任务 → ▶ 开始 → 3-2-1 倒计时（显示任务时长 + 初始休息预算）→ 全屏追逐跑道
+- **像素风跑道**：box-shadow 点阵 sprite，小人/怪兽有跑步动画（200ms 帧切换）
+- 小人向右冲刺，怪兽从后追赶；暂停时怪兽逼近
+- 暂停时：消耗休息预算（右下角 mm:ss 倒计时，不足 60s 变红）
+- **工作/休息可配置**：Tasks 页顶部计时器按钮打开设置，`work_mins` / `rest_mins` 存 config.json
+- 休息预算耗尽 → 失败；到达终点 → 完成；可随时点「⚡ 提前完成」或「中断任务」
+- 结果页区分 4 种结局：🏆 完成 / ⚡ 提前完成 / 🚩 中断（显示完成%）/ 💀 被追上
+- 无论成功/失败/中断，均保存执行记录到时间轴（`source=runner`）
+- 失败/中断任务在列表中划线显示，不消失，可重试
 
 ### 时间轴（已实现）
-- Dashboard 底部展示今日任务时间轴
-- 仅展示有执行记录的时间段，按 24 小时刻度
+- Dashboard 底部展示今日任务时间轴，竖排布局
+- 每条记录：左侧时间范围 + 任务名，右侧横向进度条（实线=工作，斜纹=暂停）
+- 成功/失败/中断记录均展示，失败显示完成百分比
+- **手动勾选记录**（`source=manual`）：进度条满格，任务名后标注「手动」小字；悬停时间区域显示铅笔图标，点击可修改开始时间（`HH:MM`），结束时间自动 = 开始 + actual_seconds
 - 底部累计：仅统计完成任务的工作时长（不含暂停/休息）
+
+### 有效学习时间 & 爬坡目标（已实现）
+- **有效时间两种口径**（用户可切换，存 config.json）：
+  - 实际口径 `actual`：`actual_seconds`（不含暂停）
+  - 计划口径 `planned`：`min(actual_seconds, task_hours × 3600)`
+- **直接勾选完成的任务**：`actual_seconds = task_hours × 3600`，两种口径结果相同
+- **排除日**：手动标记今天不计入，必须填写理由；历史任务页可查看理由
+- **爬坡目标**（`goal_state.json`）：
+  - 统一从 1h 起步；达标 → 次日 +step_mins；连续 fail_limit 天未达标 → -degrade_mins（不低于 min_goal_mins）
+  - `GET /tasks/goal` 每次调用自动结算昨日并更新状态
+  - 展示：连续达标天数（🔥）、距目标差距、连续未达标预警
+  - 用户可配置：step_mins / fail_limit / degrade_mins / min_goal_mins / goal_mins（直接修改当前目标）
+- **StudyGoalCard**：compact 版在 Dashboard，详细版在 Tasks 页顶部
 
 ### 每日提醒（已实现）
 - 托盘程序后台每 30 秒检查提醒时间
 - Windows Toast 通知，点击直接打开应用
 - 在赢麻了页面「提醒」按钮中设置，支持多个时间点
 
+### 音效系统（已实现）
+所有音效通过 `frontend/src/lib/sounds.ts` 的 Web Audio API 合成，无需外部音频文件。
+
+| 函数 | 触发时机 |
+|------|---------|
+| `playSlotTick()` | 老虎机滚动，每经过一格（减速后停止触发） |
+| `playReelStop(i)` | 第 i 个滚轮停止，D/F#/A 三和弦依次响起 |
+| `playSlotComplete(m)` | 三轮全停后上行琶音，倍数越高音越高亢 |
+| `playWinRecord(level)` | 记录赢麻了成功，星级越高音符越多越响亮 |
+| `playBountyAppear()` | 赏金任务首次弹出，低→高神秘感三音 + 铃声余韵 |
+| `playClick()` | 通用按钮点击轻音 |
+
+**注意**：Web Audio API 需要用户交互后才能播放（浏览器限制），已在 `getCtx()` 中处理 suspended 状态。
+
+### 奖励点数系统（已实现）
+
+#### 得分计算（`_calc_score` in `routers/tasks.py`）
+失败 / 中断任务得分为 0，成功任务按以下公式计算：
+
+```
+基础分 = stars × ceil(有效时长 / 0.5h)
+
+有效时长（与有效时间口径对齐）：
+  实际口径：actual_seconds / 3600
+  计划口径：min(actual_seconds, task_hours × 3600) / 3600
+
+加成系数（所有满足条件的系数相乘）：
+  零暂停       pause_count == 0              × 1.3
+  少暂停       0 < pause_count ≤ 计划段数-1  × 1.1  （计划段数=ceil(task_hours/0.5)）
+  省休息       rest_remaining_secs > 0       × 1.2
+  提前完成     end_reason == "early"          × 1.1
+  每日倍数     当日 multiplier（1.0-3.0）     × multiplier
+
+最终得分 = round(基础分 × 所有加成系数)
+```
+
+注意：零暂停和少暂停互斥（zero_pause 触发则 few_pause 不触发）；暂停次数阈值始终按**计划段数**算，不随提前完成缩水。手动勾选完成的任务（`source=manual`）不走 `_calc_score`，得分简化为：`round(stars × ceil(有效时长/0.5h) × multiplier)`，不叠加暂停/休息/提前完成加成。
+
+#### Buff 系统（已实现数据结构，效果待接入）
+
+Buff 定义在 `storage/buffs.py`，共 6 种固定模板，系数随机生成：
+
+| Buff | emoji | 类型 | 触发条件 | 系数范围 |
+|------|-------|------|----------|----------|
+| 专注冲刺 | 🎯 | `task_score` | 零暂停时得分额外加乘 | ×1.3~2.0 |
+| 闪电完成 | ⚡ | `task_score` | 提前完成时得分额外加乘 | ×1.3~2.0 |
+| 今日燃烧 | 🔥 | `daily_score` | 当天所有任务得分均加乘 | ×1.1~1.5 |
+| 免死金牌 | 🛡️ | `goal_shield` | 今天不计入连续失败次数 | 无系数 |
+| 加速成长 | 🌱 | `routine_double` | 常规任务打卡 total_done +2 | 无系数 |
+| 幸运加注 | 🎰 | `lucky_dice` | 明天抽奖骰子各 +1（上限5） | 无系数 |
+
+#### 赏金任务 Buff（已实现）
+- 内容从全历史 `task_runs` 去重随机抽取（不限今日）
+- 每日生成 0-2 个，每条随机分配一个 buff + 随机弹出时间（游戏日 08:00 内随机）
+- 前端每 60 秒轮询 `GET /bounty/daily/pending`，**首次出现**的新赏金自动弹窗 + 音效
+- 已弹过的赏金 id 记录在 `shownBountyIds` ref（会话级），不重复弹
+- 状态流转：`pending → accepted → done` 或 `pending → expired`
+- 完成赏金任务**必然**获得对应 buff（效果待接入结算逻辑）
+
+#### 日常任务 Buff（待实现）
+- 完成任务后 **20% 概率**随机抽取一个 buff
+- buff 随机，完成时才知道结果
+
 ### 待开发
-- [ ] 学习计划模块
-- [ ] AI 趋势分析（Anthropic SDK，分析赢麻了记录 + 任务完成情况）
-- [ ] 积分/经验值系统（倍数 × 重要程度 × 完成率）
+- [ ] Buff 效果实际结算接入（task_score / daily_score / goal_shield / routine_double / lucky_dice）
+- [ ] 日常任务 20% 概率 buff 抽取
+- [ ] 积分展示页面（历史得分、buff 收集记录）
+- [ ] 学习计划页面
+- [ ] AI 趋势分析（Anthropic SDK）
 - [ ] 历史回顾页面
+- [ ] Electron 打包（功能稳定后）
 
 ---
 
@@ -183,8 +304,71 @@ backend/data/*.json
 ### 关键设计决策
 - **storage 层隔离**：routers 不直接操作文件，必须通过 storage/ 层
 - **游戏日边界**：`bonus.py` 中 `_current_game_date()` 统一处理 08:00 边界
-- **老虎机容错**：后端未就绪时前端仍然弹出（catch 触发），用户可跳过
-- **任务执行记录**：`started_at` 在倒计时结束（phase='running'）时记录，非点击时
+- **老虎机容错**：后端无响应时不弹老虎机；`today()` 返回 null（今天未抽）才弹
+- **任务执行记录**：`started_at` 在倒计时结束（phase='running'）时记录，非点击时；手动勾选时 `started_at = now - task_hours×3600`
+- **task_run source 字段**：`runner`=TaskRunner 产生，`manual`=直接勾选产生；manual 记录可在时间轴编辑开始时间，runner 记录不可编辑
+- **勾选完成同步写 run**：`PATCH /daily/{id}/done` 勾选时写入 manual run，取消时删除对应 manual run；同一任务只保留一条 manual run（防重复）
+- **任务状态**：`run_status` 字段存在 daily_tasks，区分 none/running_failed/completed；失败不删任务，可重试
+- **任务结束统一入口**：所有结束路径（完成/提前/中断/失败）均通过 `finishRun(s, reason)` 处理
+- **爬坡目标结算**：`_settle_yesterday()` 在每次 `GET /tasks/goal` 时调用，检查昨日是否达标并更新状态
+- **历史任务只读**：Tasks 页切换到非今日日期时，所有编辑/添加/启动操作隐藏，`readOnly` prop 传入 TaskRow
+- **常规任务不按天统计**：routines 有自己的 log/streak，不出现在 daily_tasks 历史中
+- **常规任务 streak 重算**：`_recalc_streak()` 从 log 全量重算，保证补卡等任意日期写入后结果一致，不依赖增量逻辑
+- **常规任务 force_warning**：从 `created_date` 起算，创建前的日期不计入连续失败；避免新建当天就触发警告
+- **补卡条件**：`allow_makeup=True` + 今天已打 + 昨天未打 + 昨天 ≥ 创建日；派生字段 `makeup_available` 由后端计算，不存储
+- **赏金弹窗去重**：`shownBountyIds` ref 记录会话内已弹过的 id，只有新 id 才触发自动弹窗和音效
+- **音效初始化**：`AudioContext` 懒创建，首次调用 `getCtx()` 时实例化，suspended 状态自动 resume
+- **中断任务为暂停态**：`end_reason=giveup` 对应 `run_status=paused`，不是失败；下次启动时取出最后一条 actual_seconds 作为 `initialWorkedSecs` 传入 TaskRunner，从已有进度继续
+- **游戏日边界统一**：后端所有日期判断用 `_game_today()`（在 `routers/tasks.py` 中定义），以 08:00 为日期分界，避免 `Date.today()` 零点刷新问题
+
+---
+
+## AI 集成
+
+> 以下内容面向开发者，不面向用户。
+
+### 架构
+
+- **`backend/ai_client.py`**：零第三方依赖，用 Python 内置 `urllib.request` 发 HTTP 请求
+- 支持两种协议：
+  - `anthropic`：用 Anthropic Messages API（`/v1/messages`，`x-api-key` + `anthropic-version` 头）
+  - `openai`：用 OpenAI Chat Completions 格式（`/chat/completions`，`Authorization: Bearer` 头）；所有 OpenAI 兼容 provider 均走此协议
+- **`PROVIDERS`** dict 定义所有支持的 provider，每条包含 `label / hint_model / hint_key / protocol / base_url`
+
+### 配置存储（`config.json`）
+
+```
+ai_provider        选用的 provider id（空=未启用）
+ai_api_key         API Key（明文存本地，不上传 git）
+ai_model           用户自填模型名（空则用 PROVIDERS 里的 hint_model）
+ai_custom_base_url 仅 openai_compat 模式需要，其他 provider 忽略
+```
+
+### 可用性检查与降级模式
+
+```python
+ai_client.is_available()  # → bool：provider + key 都填了才返回 True
+ai_client.chat(prompt)    # → str | None：不可用或出错时返回 None
+ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或裸 JSON
+```
+
+调用方必须处理 `None`，降级到内置规则。**不允许因 AI 不可用而抛异常或拒绝用户操作**。
+
+### 当前 AI 功能
+
+| 函数 | 位置 | 作用 | 降级行为 |
+|------|------|------|----------|
+| `_ai_select_bounties(history, today)` | `routers/tasks.py` | 从全历史 task_runs 中筛选/创作今日赏金任务内容 | 返回 None → 随机抽取历史记录 |
+
+### 新增 AI 功能模式
+
+1. 在业务函数中调用 `ai_client.chat()` 或 `chat_json()`
+2. 收到 `None` 时回退到规则逻辑，保证功能始终可用
+3. 接口响应中可附加 `ai_generated: bool` 字段让前端决定是否展示标记
+
+### 添加新 Provider
+
+在 `ai_client.PROVIDERS` 中新增一条 dict，指定 `protocol`（`"anthropic"` 或 `"openai"`）和 `base_url`，前端设置页下拉列表会自动显示。
 
 ---
 
@@ -222,21 +406,39 @@ backend/data/*.json
 **已完成**：
 - [x] FastAPI 后端 + React 前端脚手架
 - [x] 响应式布局（桌面侧边栏 + 手机底部导航）
-- [x] 每日抽奖老虎机（滚轮动画 + 倍数计算 + 08:00 游戏日边界）
-- [x] 赢麻了模块（月历 + 记录 + 快速添加 + 删除 + 分析抽屉）
+- [x] 每日抽奖老虎机（滚轮动画 + 倍数计算 + 08:00 游戏日边界 + 后端容错 + 音效）
+- [x] 赢麻了模块（月历 + 记录 + 快速添加 + 删除 + 分析抽屉 + 音效）
+- [x] 未来可赢等级（0星/靛蓝配色，不计入星数，月历单独显示 ◇，分析抽屉单独列）
 - [x] 每日任务模块（模板库 + 当日任务 + 赏金任务 + 管理页）
-- [x] 任务追踪器（3-2-1 倒计时 + 追逐跑道 + 暂停/失败/完成 + 结果页）
-- [x] 每日时间轴（Dashboard 展示执行记录，累计专注时长）
+- [x] 直接勾选完成计入学习时间（写 manual task_run，取消时删除）
+- [x] 任务追踪器（3-2-1 倒计时 + 像素风追逐跑道 + 暂停/失败/提前完成/中断 + 结果页）
+- [x] 任务状态持久化（run_status：完成/失败/重试，时间轴均记录）
+- [x] 每日时间轴（竖排展示，手动完成记录可编辑开始时间，区分 runner/manual 来源）
 - [x] 每日提醒（托盘 + winotify Toast 通知）
 - [x] 托盘启动器（app.py + 启动.vbs，无黑窗口）
 - [x] GitHub 仓库（https://github.com/JiaheShrimp/study_agent）
-
-**进行中**：
-- [ ] 时间轴在 Dashboard 的验证（verify 待完成）
+- [x] 工作/休息时长可配置（Tasks 页计时器按钮，TaskRunner 接收 workMins/restMins props）
+- [x] 常规任务（紫色主题，连续打卡/目标天数/失败警告/数量上限）
+- [x] 常规任务补卡机制（allow_makeup 开关，今天打完可补昨天，streak 自动连续）
+- [x] 常规任务 force_warning 修复（从创建日起算，创建当天不触发警告）
+- [x] 常规任务 streak 重算（从 log 全量重算，保证补卡后一致性）
+- [x] 历史任务回溯（Tasks 页月历切换日期，历史只读）
+- [x] 有效学习时间统计（实际/计划两种口径，排除日 + 理由记录）
+- [x] 爬坡学习目标（goal_state.json，达标递增/连续失败降级/连续天数统计）
+- [x] Dashboard 精简（移除统计行和赢麻了速览，保留问候/倍数/目标卡/功能入口/时间轴）
+- [x] 奖励点数系统（stars × 有效段数 × 多重加成系数 + 每日倍数，结果页展示得分明细）
+- [x] Buff 系统数据结构（6 种模板，存 storage/buffs.py，系数随机生成）
+- [x] 赏金任务重设计（内容从全历史 task_runs 随机抽取，每条携带 buff，随机弹出时间，0-2条/天）
+- [x] 赏金任务弹窗优化（首次出现自动弹 + 音效，会话内不重复弹，弹窗尺寸放大）
+- [x] 音效系统（Web Audio API 合成，老虎机/赢麻了/赏金弹出/按钮点击）
+- [x] 时间轴显示暂停次数（`暂停 Xs · N次`）
+- [x] 任务列表失败/中断显示完成百分比（`X% · 失败 · 可重试`）
 
 **待开发**：
+- [ ] Buff 效果实际结算接入（task_score / daily_score / goal_shield / routine_double / lucky_dice）
+- [ ] 日常任务 20% 概率随机 buff 抽取
+- [ ] 积分展示页面（历史得分、buff 收集记录）
 - [ ] 学习计划页面
 - [ ] AI 趋势分析（Anthropic SDK）
-- [ ] 积分/等级系统
 - [ ] 历史回顾页面
 - [ ] Electron 打包（功能稳定后）
