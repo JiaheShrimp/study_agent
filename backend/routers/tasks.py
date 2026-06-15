@@ -7,11 +7,8 @@ from pydantic import BaseModel
 
 
 def _game_today() -> str:
-    """游戏日以 08:00 为起点，00:00-07:59 属于昨天的游戏日。"""
-    now = _Datetime.now()
-    if now.hour < 8:
-        return str((now - timedelta(days=1)).date())
-    return str(now.date())
+    """游戏日以零点为起点，与自然日对齐。"""
+    return str(_Datetime.now().date())
 
 from storage.tasks import (
     load_templates, save_templates,
@@ -47,11 +44,13 @@ class DailyTask(BaseModel):
     done: bool
     from_template: bool
     run_status: str = "none"   # none | running_failed | completed
+    count_in_effective: bool = True   # 是否计入有效学习时间
 
 class DailyTaskCreate(BaseModel):
     content: str
     hours: float
     stars: int
+    count_in_effective: bool = True
 
 class BountyTask(BaseModel):
     id: str
@@ -136,6 +135,7 @@ def init_daily_tasks(date: str | None = None):
             "done": False,
             "from_template": True,
             "run_status": "none",
+            "count_in_effective": t.get("count_in_effective", True),
         }
         for t in templates
     ]
@@ -179,14 +179,14 @@ def toggle_done(task_id: str, date: str | None = None):
         runs: list = _read(runs_path, [])
 
         if new_done:
-            # 写入一条 manual run，时间戳用现在
+            # 先移除旧 manual 记录（防重复）
+            runs = [r for r in runs if not (r.get("task_id") == task_id and r.get("source") == "manual")]
+            tasks[i]["run_status"] = "completed"
             now = _Dt.now()
             secs = int(t.get("hours", 1.0) * 3600)
             started = (now - timedelta(seconds=secs)).isoformat()
             ended   = now.isoformat()
-            # 防止重复：先移除同 task_id 的旧 manual 记录
-            runs = [r for r in runs if not (r.get("task_id") == task_id and r.get("source") == "manual")]
-            # manual 分数：只考虑星级 × 有效段数 × 当日倍数，不考虑暂停/休息加成
+            count_eff = t.get("count_in_effective", True)
             cfg = load_config()
             mode = cfg.get("effective_time_mode", "actual")
             task_hours = t.get("hours", 1.0)
@@ -195,12 +195,12 @@ def toggle_done(task_id: str, date: str | None = None):
             effective_secs = min(secs, planned_secs) if mode == "planned" else secs
             import math as _m
             segments = max(1, _m.ceil(effective_secs / 3600 / 0.5))
-            # 取今日倍数（存在 config.json 的 daily_bonus 字段里）
             saved_bonus = cfg.get("daily_bonus")
             multiplier = 1.0
             if saved_bonus and saved_bonus.get("date") == today:
                 multiplier = saved_bonus.get("multiplier", 1.0)
-            manual_score = round(task_stars * segments * multiplier)
+            # 不计入有效时间的任务得分为 0
+            manual_score = round(task_stars * segments * multiplier) if count_eff else 0
             runs.append({
                 "task_id": task_id,
                 "task_content": t.get("content", ""),
@@ -218,8 +218,8 @@ def toggle_done(task_id: str, date: str | None = None):
                 "multiplier": multiplier,
                 "source": "manual",
                 "score": manual_score,
+                "count_in_effective": count_eff,
             })
-            tasks[i]["run_status"] = "completed"
         else:
             # 取消勾选：删掉对应的 manual run，恢复状态
             runs = [r for r in runs if not (r.get("task_id") == task_id and r.get("source") == "manual")]
@@ -540,11 +540,12 @@ def save_run_result(body: TaskRunResult):
     breakdown = _calc_score(body)
     record = body.model_dump()
     record["score"] = breakdown.total
-    runs.append(record)
-    _write(path, runs)
+    # 读取任务的 count_in_effective 并写入执行记录
     tasks = load_daily_tasks(body.date)
+    count_in_effective = True
     for t in tasks:
         if t["id"] == body.task_id:
+            count_in_effective = t.get("count_in_effective", True)
             if body.success:
                 t["done"] = True
                 t["run_status"] = "completed"
@@ -552,6 +553,9 @@ def save_run_result(body: TaskRunResult):
                 t["run_status"] = "paused"
             else:
                 t["run_status"] = "running_failed"
+    record["count_in_effective"] = count_in_effective
+    runs.append(record)
+    _write(path, runs)
     save_daily_tasks(body.date, tasks)
     return RunSaveResponse(score=breakdown.total, score_breakdown=breakdown)
 
@@ -622,8 +626,21 @@ class RoutineTask(BaseModel):
     total_done: int
     last_done_date: str | None
     force_warning: bool
-    makeup_available: bool   # 今天可补昨天（派生字段，不存储）
+    fail_days: int            # 当前连续未完成天数（派生字段）
+    makeup_available: bool    # 今天可补昨天（派生字段，不存储）
     completed: bool
+
+class ArchivedRoutine(BaseModel):
+    id: str
+    content: str
+    hours: float
+    stars: int
+    target_days: int
+    created_date: str
+    archived_date: str
+    archive_reason: str       # "completed" | "failed"
+    total_done: int
+    best_streak: int
 
 class RoutineCreate(BaseModel):
     content: str
@@ -637,26 +654,22 @@ class RoutineSettings(BaseModel):
     fail_days_limit: int
 
 
-def _check_force_warning(routine: dict, fail_days_limit: int) -> bool:
-    """判断是否触发强制删除警告：创建后连续 fail_days_limit 天未完成。"""
+def _count_fail_days(routine: dict, max_days: int = 365) -> int:
+    """计算从昨天往前连续未完成的天数（今天未结束不计入；创建日之前不计入）。"""
     if routine.get("completed"):
-        return False
+        return 0
     today = Date.fromisoformat(_game_today())
     created = Date.fromisoformat(routine.get("created_date", str(today)))
     log = routine.get("log", {})
     consecutive_fails = 0
-    for i in range(fail_days_limit):
+    for i in range(1, max_days + 1):
         day = today - timedelta(days=i)
-        # 创建日期之前的天数不计入失败
         if day < created:
             break
-        day_str = str(day)
-        if log.get(day_str) is True:
-            # 当天已完成，连续中断
+        if log.get(str(day)) is True:
             break
-        else:
-            consecutive_fails += 1
-    return consecutive_fails >= fail_days_limit
+        consecutive_fails += 1
+    return consecutive_fails
 
 
 def _makeup_available(r: dict) -> bool:
@@ -674,19 +687,89 @@ def _makeup_available(r: dict) -> bool:
 
 
 def _routine_to_model(r: dict, fail_days_limit: int) -> dict:
-    r["force_warning"] = _check_force_warning(r, fail_days_limit)
+    fail_days = _count_fail_days(r)
+    r["fail_days"] = fail_days
+    r["force_warning"] = fail_days >= fail_days_limit
     r.setdefault("allow_makeup", False)
     r["makeup_available"] = _makeup_available(r)
     return r
 
 
+def _archive_routine(r: dict, reason: str, data: dict) -> None:
+    """将常规任务移入 archived_routines。"""
+    archived = {
+        "id": r["id"],
+        "content": r.get("content", ""),
+        "hours": r.get("hours", 1.0),
+        "stars": r.get("stars", 3),
+        "target_days": r.get("target_days", 21),
+        "created_date": r.get("created_date", _game_today()),
+        "archived_date": _game_today(),
+        "archive_reason": reason,
+        "total_done": r.get("total_done", 0),
+        "best_streak": r.get("best_streak", 0),
+    }
+    data.setdefault("archived_routines", []).append(archived)
+    data["routines"] = [x for x in data["routines"] if x["id"] != r["id"]]
+
+
 @router.get("/routines", response_model=dict)
 def get_routines():
-    """返回常规任务列表和设置。"""
+    """返回常规任务列表和设置。自动归档超过 fail_days_limit 连续失败的任务。"""
     data = load_routines()
     fl = data["fail_days_limit"]
+    changed = False
+    for r in list(data["routines"]):
+        fail_days = _count_fail_days(r)
+        if not r.get("completed") and fail_days >= fl:
+            _archive_routine(r, "failed", data)
+            changed = True
+    if changed:
+        save_routines(data)
     data["routines"] = [_routine_to_model(r, fl) for r in data["routines"]]
     return data
+
+
+@router.get("/routines/archived", response_model=list[ArchivedRoutine])
+def get_archived_routines():
+    """返回所有已归档（完成/失败）的常规任务历史。"""
+    data = load_routines()
+    return data.get("archived_routines", [])
+
+
+@router.post("/routines/{routine_id}/restart", response_model=RoutineTask)
+def restart_routine(routine_id: str):
+    """将归档中的失败常规任务重新启动（受 max_routines 限制）。"""
+    data = load_routines()
+    archived = data.get("archived_routines", [])
+    target = next((a for a in archived if a["id"] == routine_id), None)
+    if not target:
+        raise HTTPException(404, "归档任务不存在")
+    if target.get("archive_reason") != "failed":
+        raise HTTPException(400, "已完成的任务无法重启")
+    active_count = len(data["routines"])
+    if active_count >= data["max_routines"]:
+        raise HTTPException(400, f"当前常规任务已达上限 {data['max_routines']} 个，请先删除一个再重启")
+    new_routine = {
+        "id": str(uuid.uuid4()),
+        "content": target["content"],
+        "hours": target["hours"],
+        "stars": target["stars"],
+        "target_days": target["target_days"],
+        "allow_makeup": False,
+        "created_date": _game_today(),
+        "streak": 0,
+        "best_streak": 0,
+        "total_done": 0,
+        "last_done_date": None,
+        "completed": False,
+        "log": {},
+    }
+    data["routines"].append(new_routine)
+    # 移除归档中的对应记录
+    data["archived_routines"] = [a for a in archived if a["id"] != routine_id]
+    save_routines(data)
+    return _routine_to_model(new_routine, data["fail_days_limit"])
 
 
 @router.put("/routines/settings", response_model=RoutineSettings)
@@ -758,6 +841,8 @@ def _recalc_streak(r: dict) -> None:
 @router.patch("/routines/{routine_id}/done", response_model=RoutineTask)
 def mark_routine_done(routine_id: str, date: str | None = None):
     """标记常规任务完成（切换）。date 默认今天，补卡时传昨天日期。"""
+    import os as _os_r
+    import math as _m_r
     target_date = date or _game_today()
     data = load_routines()
     fl = data["fail_days_limit"]
@@ -774,7 +859,67 @@ def mark_routine_done(routine_id: str, date: str | None = None):
         _recalc_streak(r)
         r["completed"] = r["total_done"] >= r["target_days"]
 
+        # 达成目标后自动归档为 completed
+        if r["completed"] and new_val:
+            save_routines(data)
+            _archive_routine(r, "completed", data)
+            save_routines(data)
+            # 返回归档前的最终状态给前端展示
+            r["fail_days"] = 0
+            r["force_warning"] = False
+            r.setdefault("allow_makeup", False)
+            r["makeup_available"] = False
+            return r
+
         save_routines(data)
+
+        # 补卡（target_date != 今天）只更新 streak，不写 task_run
+        today = _game_today()
+        if target_date == today:
+            # 今日打卡：同步写/删 task_runs，计入今日有效学习时间
+            runs_path = _os_r.path.join(DATA_DIR, "task_runs.json")
+            runs: list = _read(runs_path, [])
+            runs = [x for x in runs if not (x.get("task_id") == routine_id and x.get("source") == "routine" and x.get("date") == today)]
+            if new_val:
+                cfg = load_config()
+                mode = cfg.get("effective_time_mode", "actual")
+                task_hours = r.get("hours", 1.0)
+                task_stars = r.get("stars", 3)
+                secs = int(task_hours * 3600)
+                # 时长为 0 的习惯不写执行记录，不显示在时间轴
+                if secs == 0:
+                    _write(runs_path, runs)
+                    return _routine_to_model(r, fl)
+                now = _Datetime.now()
+                started = (now - timedelta(seconds=secs)).isoformat()
+                ended = now.isoformat()
+                saved_bonus = cfg.get("daily_bonus")
+                multiplier = 1.0
+                if saved_bonus and saved_bonus.get("date") == today:
+                    multiplier = saved_bonus.get("multiplier", 1.0)
+                effective_secs = min(secs, int(task_hours * 3600)) if mode == "planned" else secs
+                segments = max(1, _m_r.ceil(effective_secs / 3600 / 0.5))
+                routine_score = round(task_stars * segments * multiplier)
+                runs.append({
+                    "task_id": routine_id,
+                    "task_content": r.get("content", ""),
+                    "date": today,
+                    "success": True,
+                    "started_at": started,
+                    "ended_at": ended,
+                    "actual_seconds": secs,
+                    "pause_count": 0,
+                    "pause_seconds": 0,
+                    "task_hours": task_hours,
+                    "task_stars": task_stars,
+                    "end_reason": "complete",
+                    "rest_remaining_secs": 0,
+                    "multiplier": multiplier,
+                    "source": "routine",
+                    "score": routine_score,
+                })
+            _write(runs_path, runs)
+
         return _routine_to_model(r, fl)
     raise HTTPException(404, "常规任务不存在")
 
@@ -791,9 +936,12 @@ def _get_runs_for_date(date: str) -> list[dict]:
 
 
 def _calc_effective_secs(runs: list[dict], mode: str) -> int:
-    """实际口径：累加 actual_seconds；计划口径：每条取 min(actual, task_hours*3600)。"""
+    """实际口径：累加 actual_seconds；计划口径：每条取 min(actual, task_hours*3600)。
+    count_in_effective=False 的记录不计入。"""
     total = 0
     for r in runs:
+        if not r.get("count_in_effective", True):
+            continue
         actual = r.get("actual_seconds", 0)
         planned = int(r.get("task_hours", 1.0) * 3600)
         total += min(actual, planned) if mode == "planned" else actual

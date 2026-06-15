@@ -5,13 +5,12 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-// 游戏日边界：00:00-07:59 属于前一天，与后端 _current_game_date() 对齐
+// 游戏日以零点为起点，与自然日对齐
+// 注意：必须用本地时间字段，toISOString() 是 UTC 会导致时区偏移
 export function gameToday(): string {
   const now = new Date()
-  if (now.getHours() < 8) {
-    const yesterday = new Date(now)
-    yesterday.setDate(yesterday.getDate() - 1)
-    return yesterday.toISOString().slice(0, 10)
-  }
-  return now.toISOString().slice(0, 10)
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }

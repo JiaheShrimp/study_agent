@@ -117,13 +117,14 @@ npm run dev
 | 进步等级 | `win_level` | `small` / `medium` / `big` / `future` |
 | 星星数 | `stars` | small=1, medium=2, big=3, future=0 |
 | 每日倍数 | `daily_bonus` / `multiplier` | 1.0-3.0，三数平均映射 |
-| 游戏日 | game date | 以每天 **08:00** 为起点，00-07:59 属于前一天 |
+| 游戏日 | game date | 以每天 **00:00** 为起点，与自然日对齐 |
 | 任务模板 | `task_template` | 每天自动复制到当日任务的模板 |
 | 当日任务 | `daily_task` | 当天的具体任务实例，可编辑 |
 | 赏金任务 | `bounty_task` | 每天随机抽取 0-2 个，可接受/跳过，携带 buff |
 | 常规任务 | `routine_task` | 习惯养成任务，有连续打卡/目标天数/连续失败警告，紫色主题 |
 | 任务执行 | `task_run` | 一次任务的完整执行记录（TaskRunner 或手动勾选） |
-| 执行来源 | `source` | `runner`=倒计时完成 / `manual`=直接勾选完成 |
+| 执行来源 | `source` | `runner`=倒计时完成 / `manual`=直接勾选完成 / `routine`=常规任务打卡 |
+| 计入有效时间 | `count_in_effective` | 任务及对应 task_run 上的布尔字段；`false` 时不计入有效学习时间统计，时间轴仍显示 |
 | 任务结果 | `run_status` | `none` / `running_failed` / `completed` |
 | 工作段 | work block | 可配置的专注时长（默认 30 分钟） |
 | 休息预算 | rest budget | 暂停时消耗；可配置（默认 5 分钟）；耗尽则失败；以剩余时间（mm:ss）显示 |
@@ -140,9 +141,9 @@ npm run dev
 ## 游戏化机制
 
 ### 每日抽奖（已实现）
-- 每天 **08:00 后**第一次打开自动弹出老虎机
+- 每天**零点后**第一次打开自动弹出老虎机
 - 三个滚轮各抽 1-5（权重递减），平均值映射到 1.0-3.0×
-- 游戏日以 08:00 为界，跨午夜倍数不失效
+- 游戏日以零点为界，与自然日对齐
 - 当天倍数显示在全局顶部条 + Dashboard 卡片
 - **容错**：后端无响应时不弹老虎机（不报错）；保存成功才关闭弹窗
 - **音效**：滚动 tick → 每轮停止和弦音 → 全停琶音（倍数越高越高亢）
@@ -162,7 +163,8 @@ npm run dev
 - 每条任务有：内容、预计时长(h)、重要程度(1-5 星)
 - 任务状态区分：完成（绿勾划线）/ 失败（红色划线，标注"X% · 失败·可重试"）/ 未开始
 - 失败/中断任务显示完成百分比，可直接点 ▶ 重试，成功任务不能再启动
-- **直接勾选完成**：不经过计时器直接打勾，自动按 `task_hours × 3600` 写入 `source=manual` 的 task_run，计入有效学习时间；取消勾选则删除该记录
+- **直接勾选完成**：不经过计时器直接打勾，写入 `source=manual` 的 task_run；`count_in_effective=true`（默认）时计入有效学习时间，`false` 时只在时间轴展示不计时，得分为 0；取消勾选则删除该记录
+- **不计入学习时间**：添加/编辑任务时可勾选「不计入学习时间」（`count_in_effective` 字段）；对应 task_run 同步写入该字段，时间轴标注「不计时」灰色小字，底部累计专注时间不包含此类记录
 - **历史回溯**：Tasks 页顶部月历切换日期，历史日任务只读（不可编辑/添加/启动）
 
 ### 常规任务（已实现）
@@ -192,7 +194,9 @@ npm run dev
 - 每条记录：左侧时间范围 + 任务名，右侧横向进度条（实线=工作，斜纹=暂停）
 - 成功/失败/中断记录均展示，失败显示完成百分比
 - **手动勾选记录**（`source=manual`）：进度条满格，任务名后标注「手动」小字；悬停时间区域显示铅笔图标，点击可修改开始时间（`HH:MM`），结束时间自动 = 开始 + actual_seconds
-- 底部累计：仅统计完成任务的工作时长（不含暂停/休息）
+- 底部累计：仅统计 `count_in_effective=true` 的完成任务工作时长（不含暂停/休息）
+- `actual_seconds=0` 的记录不显示在时间轴（如时长设为 0 的常规习惯任务）
+- 常规任务打卡（`source=routine`）也会出现在时间轴，任务名后标「常规」紫色小字
 
 ### 有效学习时间 & 爬坡目标（已实现）
 - **有效时间两种口径**（用户可切换，存 config.json）：
@@ -306,8 +310,10 @@ backend/data/*.json
 - **游戏日边界**：`bonus.py` 中 `_current_game_date()` 统一处理 08:00 边界
 - **老虎机容错**：后端无响应时不弹老虎机；`today()` 返回 null（今天未抽）才弹
 - **任务执行记录**：`started_at` 在倒计时结束（phase='running'）时记录，非点击时；手动勾选时 `started_at = now - task_hours×3600`
-- **task_run source 字段**：`runner`=TaskRunner 产生，`manual`=直接勾选产生；manual 记录可在时间轴编辑开始时间，runner 记录不可编辑
-- **勾选完成同步写 run**：`PATCH /daily/{id}/done` 勾选时写入 manual run，取消时删除对应 manual run；同一任务只保留一条 manual run（防重复）
+- **task_run source 字段**：`runner`=TaskRunner 产生，`manual`=直接勾选产生，`routine`=常规任务打卡产生；manual 记录可在时间轴编辑开始时间，runner/routine 记录不可编辑
+- **task_run count_in_effective 字段**：从任务的 `count_in_effective` 字段继承写入；`_calc_effective_secs()` 跳过该字段为 `false` 的记录；时间轴 `actual_seconds=0` 的记录不展示
+- **勾选完成同步写 run**：`PATCH /daily/{id}/done` 勾选时始终写入 manual run（无论是否计时），取消时删除对应 manual run；同一任务只保留一条 manual run（防重复）
+- **常规任务时间轴**：`source=routine` 的记录现在出现在时间轴；`hours=0` 的常规任务不写 task_run（不在时间轴显示）
 - **任务状态**：`run_status` 字段存在 daily_tasks，区分 none/running_failed/completed；失败不删任务，可重试
 - **任务结束统一入口**：所有结束路径（完成/提前/中断/失败）均通过 `finishRun(s, reason)` 处理
 - **爬坡目标结算**：`_settle_yesterday()` 在每次 `GET /tasks/goal` 时调用，检查昨日是否达标并更新状态
@@ -319,7 +325,7 @@ backend/data/*.json
 - **赏金弹窗去重**：`shownBountyIds` ref 记录会话内已弹过的 id，只有新 id 才触发自动弹窗和音效
 - **音效初始化**：`AudioContext` 懒创建，首次调用 `getCtx()` 时实例化，suspended 状态自动 resume
 - **中断任务为暂停态**：`end_reason=giveup` 对应 `run_status=paused`，不是失败；下次启动时取出最后一条 actual_seconds 作为 `initialWorkedSecs` 传入 TaskRunner，从已有进度继续
-- **游戏日边界统一**：后端所有日期判断用 `_game_today()`（在 `routers/tasks.py` 中定义），以 08:00 为日期分界，避免 `Date.today()` 零点刷新问题
+- **游戏日边界统一**：后端所有日期判断用 `_game_today()`（在 `routers/tasks.py` 中定义），以零点为日期分界，与自然日对齐
 
 ---
 
@@ -410,10 +416,10 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - [x] 赢麻了模块（月历 + 记录 + 快速添加 + 删除 + 分析抽屉 + 音效）
 - [x] 未来可赢等级（0星/靛蓝配色，不计入星数，月历单独显示 ◇，分析抽屉单独列）
 - [x] 每日任务模块（模板库 + 当日任务 + 赏金任务 + 管理页）
-- [x] 直接勾选完成计入学习时间（写 manual task_run，取消时删除）
+- [x] 直接勾选完成计入学习时间（写 manual task_run，取消时删除；支持「不计入学习时间」选项）
 - [x] 任务追踪器（3-2-1 倒计时 + 像素风追逐跑道 + 暂停/失败/提前完成/中断 + 结果页）
 - [x] 任务状态持久化（run_status：完成/失败/重试，时间轴均记录）
-- [x] 每日时间轴（竖排展示，手动完成记录可编辑开始时间，区分 runner/manual 来源）
+- [x] 每日时间轴（竖排展示，手动完成记录可编辑开始时间，区分 runner/manual/routine 来源；常规任务标「常规」紫色；不计时任务标「不计时」灰色；hours=0 不显示）
 - [x] 每日提醒（托盘 + winotify Toast 通知）
 - [x] 托盘启动器（app.py + 启动.vbs，无黑窗口）
 - [x] GitHub 仓库（https://github.com/JiaheShrimp/study_agent）

@@ -15,10 +15,6 @@ export default function App() {
   const [bonus, setBonus] = useState<DailyBonus | null>(null)
 
   useEffect(() => {
-    // 8 点前不弹老虎机
-    const hour = new Date().getHours()
-    if (hour < 8) return
-
     api.bonus.today().then(b => {
       if (b) {
         setBonus(b)

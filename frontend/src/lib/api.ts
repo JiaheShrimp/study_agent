@@ -86,8 +86,22 @@ export interface RoutineTask {
   total_done: number
   last_done_date: string | null
   force_warning: boolean
+  fail_days: number
   makeup_available: boolean
   completed: boolean
+}
+
+export interface ArchivedRoutine {
+  id: string
+  content: string
+  hours: number
+  stars: number
+  target_days: number
+  created_date: string
+  archived_date: string
+  archive_reason: 'completed' | 'failed'
+  total_done: number
+  best_streak: number
 }
 
 export interface RoutineSettings {
@@ -132,6 +146,7 @@ export interface DailyTask {
   done: boolean
   from_template: boolean
   run_status?: 'none' | 'running_failed' | 'completed' | 'paused'
+  count_in_effective: boolean
 }
 
 export interface BountyBuff {
@@ -184,9 +199,9 @@ export const api = {
     dailyDates: () => get<string[]>('/tasks/daily/dates'),
     daily: (date?: string) => get<DailyTask[]>(`/tasks/daily${date ? `?date=${date}` : ''}`),
     initDaily: () => post<DailyTask[]>('/tasks/daily/init', {}),
-    addDaily: (t: { content: string; hours: number; stars: number }) =>
+    addDaily: (t: { content: string; hours: number; stars: number; count_in_effective: boolean }) =>
       post<DailyTask>('/tasks/daily', t),
-    updateDaily: (id: string, t: { content: string; hours: number; stars: number }) =>
+    updateDaily: (id: string, t: { content: string; hours: number; stars: number; count_in_effective: boolean }) =>
       post<DailyTask>(`/tasks/daily/${id}`, t, 'PUT'),
     toggleDone: (id: string) => post<DailyTask>(`/tasks/daily/${id}/done`, {}, 'PATCH'),
     deleteDaily: (id: string) => del(`/tasks/daily/${id}`),
@@ -210,6 +225,7 @@ export const api = {
       started_at: string; ended_at: string
       actual_seconds: number; pause_count: number; pause_seconds: number
       task_hours: number; end_reason?: string; score?: number; source?: string
+      count_in_effective?: boolean
     }[]>(`/tasks/runs${date ? `?date=${date}` : ''}`),
     dailyScore: (date?: string) => get<{ date: string; total_score: number }>(
       `/tasks/daily-score${date ? `?date=${date}` : ''}`
@@ -254,6 +270,8 @@ export const api = {
     delete: (id: string) => del(`/tasks/routines/${id}`),
     toggleDone: (id: string, date?: string) =>
       post<RoutineTask>(`/tasks/routines/${id}/done${date ? `?date=${date}` : ''}`, {}, 'PATCH'),
+    archived: () => get<ArchivedRoutine[]>('/tasks/routines/archived'),
+    restart: (id: string) => post<RoutineTask>(`/tasks/routines/${id}/restart`, {}),
   },
   wins: {
     list: () => get<Win[]>('/wins/'),

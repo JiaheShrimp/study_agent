@@ -13,16 +13,8 @@ class DailyBonus(BaseModel):
 
 
 def _current_game_date() -> str:
-    """
-    游戏日期以当天 08:00 为起点。
-    00:00-07:59 仍属于前一天的游戏日（前一天的倍数继续有效）。
-    """
-    now = datetime.now()
-    if now.hour < 8:
-        # 还未到 8 点，属于昨天的游戏日
-        from datetime import timedelta
-        return str((now - timedelta(days=1)).date())
-    return str(now.date())
+    """游戏日以零点为起点，与自然日对齐。"""
+    return str(datetime.now().date())
 
 
 @router.get("/today", response_model=DailyBonus | None)

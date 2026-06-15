@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Check, Trash2, Plus, Settings, Star, Clock, Swords, X, Play, Timer, Flame, AlertTriangle, Trophy, RotateCcw, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react'
-import { api, type DailyTask, type DailyBounty, type WorkRestConfig, type RoutineTask, type RoutinesData } from '@/lib/api'
+import { api, type DailyTask, type DailyBounty, type WorkRestConfig, type RoutineTask, type RoutinesData, type ArchivedRoutine } from '@/lib/api'
 
 type TaskRun = Awaited<ReturnType<typeof api.tasks.runs>>[number]
 import { cn, gameToday } from '@/lib/utils'
@@ -12,7 +12,12 @@ import { playBountyAppear, playClick } from '@/lib/sounds'
 // ── 工具 ─────────────────────────────────────────────────────
 function daysInMonth(y: number, m: number) { return new Date(y, m + 1, 0).getDate() }
 function firstWeekday(y: number, m: number) { return new Date(y, m, 1).getDay() }
-function fmtDate(d: Date) { return d.toISOString().slice(0, 10) }
+function fmtDate(d: Date) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 
 // ── 任务月历选择器 ────────────────────────────────────────────
 function TaskCalendar({
@@ -111,11 +116,12 @@ function StarPicker({ value, onChange }: { value: number; onChange: (v: number) 
 }
 
 // ── 快速添加 ──────────────────────────────────────────────────
-function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; stars: number }) => Promise<void> }) {
-  const [content, setContent] = useState('')
-  const [hours, setHours]     = useState(1)
-  const [stars, setStars]     = useState(3)
-  const [adding, setAdding]   = useState(false)
+function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; stars: number; count_in_effective: boolean }) => Promise<void> }) {
+  const [content, setContent]                 = useState('')
+  const [hours, setHours]                     = useState(1)
+  const [stars, setStars]                     = useState(3)
+  const [countInEffective, setCountInEffective] = useState(true)
+  const [adding, setAdding]                   = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   async function submit() {
@@ -123,7 +129,7 @@ function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; star
     if (!trimmed || adding) return
     setAdding(true)
     try {
-      await onAdd({ content: trimmed, hours, stars })
+      await onAdd({ content: trimmed, hours, stars, count_in_effective: countInEffective })
       setContent('')
       inputRef.current?.focus()
     } finally {
@@ -158,7 +164,7 @@ function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; star
           <Plus className="h-4 w-4" />
         </button>
       </div>
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 flex-wrap">
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <Clock className="h-3.5 w-3.5" />
           <input
@@ -170,6 +176,15 @@ function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; star
           <span className="text-xs">h</span>
         </div>
         <StarPicker value={stars} onChange={setStars} />
+        <label className="flex items-center gap-1.5 cursor-pointer select-none ml-auto">
+          <input
+            type="checkbox"
+            checked={!countInEffective}
+            onChange={e => setCountInEffective(!e.target.checked)}
+            className="h-3.5 w-3.5 rounded accent-muted-foreground"
+          />
+          <span className="text-xs text-muted-foreground">不计入学习时间</span>
+        </label>
       </div>
     </div>
   )
@@ -180,14 +195,19 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
   task: DailyTask
   onToggle: () => void
   onDelete: () => void
-  onUpdate: (t: { content: string; hours: number; stars: number }) => void
+  onUpdate: (t: { content: string; hours: number; stars: number; count_in_effective: boolean }) => void
   onStart: () => void
   readOnly?: boolean
   completePct?: number   // 失败/中断时的完成百分比（0-99）
   score?: number         // 完成任务的得分
 }) {
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState({ content: task.content, hours: task.hours, stars: task.stars })
+  const [draft, setDraft] = useState({
+    content: task.content,
+    hours: task.hours,
+    stars: task.stars,
+    count_in_effective: task.count_in_effective ?? true,
+  })
 
   function save() {
     if (draft.content.trim()) onUpdate({ ...draft, content: draft.content.trim() })
@@ -204,7 +224,7 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
           onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
           className="w-full h-8 rounded-lg border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
         />
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-1.5 text-muted-foreground">
             <Clock className="h-3.5 w-3.5" />
             <input
@@ -216,6 +236,15 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
             <span className="text-xs">h</span>
           </div>
           <StarPicker value={draft.stars} onChange={s => setDraft(d => ({ ...d, stars: s }))} />
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={!draft.count_in_effective}
+              onChange={e => setDraft(d => ({ ...d, count_in_effective: !e.target.checked }))}
+              className="h-3.5 w-3.5 rounded accent-muted-foreground"
+            />
+            <span className="text-xs text-muted-foreground">不计入学习时间</span>
+          </label>
           <div className="ml-auto flex gap-2">
             <button onClick={save} className="text-xs text-primary font-medium">保存</button>
             <button onClick={() => setEditing(false)} className="text-xs text-muted-foreground">取消</button>
@@ -282,7 +311,12 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
               {completePct != null ? `${completePct}% · ` : ''}已暂停 · 点击继续
             </span>
           )}
-          {isComplete && score != null && (
+          {!(task.count_in_effective ?? true) && (
+            <span className="text-[10px] text-muted-foreground/70 bg-secondary px-1.5 py-0.5 rounded-md">
+              不计时
+            </span>
+          )}
+          {isComplete && score != null && (task.count_in_effective ?? true) && (
             <span className="text-[10px] text-amber-500 font-medium bg-amber-50 px-1.5 py-0.5 rounded-md">
               +{score}★
             </span>
@@ -578,6 +612,7 @@ function RoutineSettingsModal({
 function RoutineCard({
   routine,
   today,
+  failDaysLimit,
   onToggle,
   onMakeup,
   onDelete,
@@ -585,6 +620,7 @@ function RoutineCard({
 }: {
   routine: RoutineTask
   today: string
+  failDaysLimit: number
   onToggle: () => void
   onMakeup: () => void
   onDelete: () => void
@@ -723,7 +759,14 @@ function RoutineCard({
       {routine.force_warning && !routine.completed && (
         <div className="rounded-xl bg-rose-100 border border-rose-200 px-3 py-2 text-xs text-rose-700 flex items-start gap-1.5">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-          <span>连续多天未完成，建议删除此任务，重新设立更可行的目标。</span>
+          <span>已连续 <strong>{routine.fail_days}</strong> 天未完成，达到上限后将自动移除此习惯。</span>
+        </div>
+      )}
+      {/* 接近警告（未触发但已有失败天数） */}
+      {!routine.force_warning && !routine.completed && routine.fail_days > 0 && (
+        <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700 flex items-start gap-1.5">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span>已连续 <strong>{routine.fail_days}</strong> 天未完成，连续 {failDaysLimit} 天将自动移除。</span>
         </div>
       )}
 
@@ -878,6 +921,8 @@ export function Tasks() {
   const [multiplier, setMultiplier] = useState(1.0)
   const [addRoutineModal, setAddRoutineModal]         = useState(false)
   const [routineSettingsModal, setRoutineSettingsModal] = useState(false)
+  const [archivedDrawer, setArchivedDrawer]           = useState(false)
+  const [archivedList, setArchivedList]               = useState<ArchivedRoutine[]>([])
   const [studyRefreshKey, setStudyRefreshKey] = useState(0)
   const [runnerInitSecs, setRunnerInitSecs] = useState(0)
   // 本次会话已经弹出过的赏金任务 id，避免重复弹
@@ -944,7 +989,7 @@ export function Tasks() {
     return () => clearInterval(id)
   }, [isToday])
 
-  async function handleAdd(t: { content: string; hours: number; stars: number }) {
+  async function handleAdd(t: { content: string; hours: number; stars: number; count_in_effective: boolean }) {
     await api.tasks.addDaily(t)
     reload(selectedDate)
     api.tasks.dailyDates().then(d => setDatesWithTasks(new Set(d))).catch(() => {})
@@ -955,7 +1000,7 @@ export function Tasks() {
     setStudyRefreshKey(k => k + 1)
   }
   async function handleDelete(id: string) { await api.tasks.deleteDaily(id); reload(selectedDate) }
-  async function handleUpdate(id: string, t: { content: string; hours: number; stars: number }) {
+  async function handleUpdate(id: string, t: { content: string; hours: number; stars: number; count_in_effective: boolean }) {
     await api.tasks.updateDaily(id, t); reload(selectedDate)
   }
   async function handleBountyAccept(id: string) {
@@ -1081,6 +1126,18 @@ export function Tasks() {
                 </span>
               </p>
               <div className="flex gap-1.5">
+                <button
+                  onClick={async () => {
+                    const list = await api.routines.archived().catch(() => [])
+                    setArchivedList(list)
+                    setArchivedDrawer(true)
+                  }}
+                  className="h-6 px-2 rounded-md flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                  title="习惯历史"
+                >
+                  <CalendarDays className="h-3 w-3" />
+                  历史
+                </button>
                 <button onClick={() => setRoutineSettingsModal(true)}
                   className="h-6 w-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
                   <Settings className="h-3.5 w-3.5" />
@@ -1108,6 +1165,7 @@ export function Tasks() {
                     key={r.id}
                     routine={r}
                     today={todayStr}
+                    failDaysLimit={routinesData.fail_days_limit}
                     onToggle={async () => {
                       const updated = await api.routines.toggleDone(r.id, todayStr).catch(() => null)
                       if (updated) {
@@ -1118,7 +1176,7 @@ export function Tasks() {
                       }
                     }}
                     onMakeup={async () => {
-                      const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+                      const yesterday = fmtDate(new Date(Date.now() - 86400000))
                       const updated = await api.routines.toggleDone(r.id, yesterday).catch(() => null)
                       if (updated) {
                         setRoutinesData(d => ({
@@ -1269,6 +1327,95 @@ export function Tasks() {
           }}
           onClose={() => setTimerModal(false)}
         />
+      )}
+
+      {/* 常规任务：归档历史抽屉 */}
+      {archivedDrawer && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          <div className="absolute inset-0 bg-foreground/15 backdrop-blur-sm" onClick={() => setArchivedDrawer(false)} />
+          <div className="relative z-10 w-full max-w-md mx-0 sm:mx-4 bg-card rounded-t-3xl sm:rounded-3xl border border-border shadow-2xl overflow-hidden max-h-[80vh] flex flex-col">
+            <div className="h-1 bg-gradient-to-r from-violet-300 to-violet-500" />
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-widest">习惯历史</p>
+                <h3 className="text-base font-semibold mt-0.5">常规任务记录</h3>
+              </div>
+              <button onClick={() => setArchivedDrawer(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4 space-y-3">
+              {archivedList.length === 0 ? (
+                <div className="py-10 text-center text-sm text-muted-foreground">还没有历史记录</div>
+              ) : (
+                [...archivedList].reverse().map(a => (
+                  <div key={a.id} className={cn(
+                    'rounded-2xl border p-4 space-y-2',
+                    a.archive_reason === 'completed'
+                      ? 'border-emerald-200 bg-emerald-50/40'
+                      : 'border-rose-100 bg-rose-50/30'
+                  )}>
+                    <div className="flex items-start gap-2">
+                      <span className="text-base mt-0.5">{a.archive_reason === 'completed' ? '🏆' : '💔'}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className={cn(
+                          'text-sm font-medium',
+                          a.archive_reason === 'completed' ? 'text-emerald-700' : 'text-rose-700'
+                        )}>{a.content}</p>
+                        <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted-foreground">
+                          <span className="flex items-center gap-0.5"><Clock className="h-3 w-3" />{a.hours}h</span>
+                          <span className="flex gap-0.5">
+                            {Array.from({ length: a.stars }).map((_, i) => (
+                              <Star key={i} className="h-2.5 w-2.5 text-amber-400 fill-amber-400" />
+                            ))}
+                          </span>
+                        </div>
+                      </div>
+                      <span className={cn(
+                        'text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0',
+                        a.archive_reason === 'completed'
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-rose-100 text-rose-700'
+                      )}>
+                        {a.archive_reason === 'completed' ? '已达成' : '已失败'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                      <span>完成 {a.total_done}/{a.target_days} 天</span>
+                      <span>·</span>
+                      <span>最长连续 {a.best_streak} 天</span>
+                      <span>·</span>
+                      <span>{a.archived_date} 归档</span>
+                    </div>
+                    {a.archive_reason === 'failed' && (
+                      <button
+                        onClick={async () => {
+                          const activeCount = routinesData.routines.filter(r => !r.completed).length
+                          if (activeCount >= routinesData.max_routines) {
+                            alert(`当前已有 ${routinesData.max_routines} 个常规任务，请先删除一个再重启`)
+                            return
+                          }
+                          const newR = await api.routines.restart(a.id).catch((e: Error) => {
+                            alert(e.message || '重启失败')
+                            return null
+                          })
+                          if (newR) {
+                            setRoutinesData(d => ({ ...d, routines: [...d.routines, newR] }))
+                            setArchivedList(l => l.filter(x => x.id !== a.id))
+                          }
+                        }}
+                        className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700 font-medium hover:bg-violet-100 transition-colors"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        重新挑战此习惯
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 赏金任务弹窗 */}

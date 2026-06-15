@@ -16,7 +16,12 @@ const LEVELS: { value: Win['win_level']; label: string; short: string; cls: stri
 ]
 const LEVEL_MAP = Object.fromEntries(LEVELS.map(l => [l.value, l])) as Record<Win['win_level'], typeof LEVELS[0]>
 
-function fmt(d: Date) { return d.toISOString().slice(0, 10) }
+function fmt(d: Date) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 function daysInMonth(y: number, m: number) { return new Date(y, m + 1, 0).getDate() }
 function firstWeekday(y: number, m: number) { return new Date(y, m, 1).getDay() }
 

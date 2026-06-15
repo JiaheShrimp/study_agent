@@ -16,6 +16,7 @@ interface Run {
   task_hours: number
   end_reason?: string
   source?: string
+  count_in_effective?: boolean
 }
 
 function fmtTime(iso: string) {
@@ -69,7 +70,10 @@ function RunRow({ run, onTimeUpdate }: { run: Run; onTimeUpdate: (startedAt: str
     const base = new Date(run.started_at)
     const [h, m] = timeInput.split(':').map(Number)
     base.setHours(h, m, 0, 0)
-    onTimeUpdate(base.toISOString().slice(0, 19))
+    // 用本地时间拼字符串，避免 toISOString() 转 UTC 导致时区偏移
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    const localStr = `${base.getFullYear()}-${pad(base.getMonth() + 1)}-${pad(base.getDate())}T${pad(base.getHours())}:${pad(base.getMinutes())}:00`
+    onTimeUpdate(localStr)
     setEditing(false)
   }
 
@@ -117,6 +121,12 @@ function RunRow({ run, onTimeUpdate }: { run: Run; onTimeUpdate: (startedAt: str
         )}>
           {run.task_content}
           {isPaused && <span className="ml-1 text-xs text-amber-500">已暂停</span>}
+          {run.source === 'routine' && (
+            <span className="ml-1 text-[10px] text-violet-400 font-normal">常规</span>
+          )}
+          {run.count_in_effective === false && (
+            <span className="ml-1 text-[10px] text-muted-foreground/60 font-normal">不计时</span>
+          )}
         </p>
       </div>
 
@@ -187,11 +197,12 @@ export function DayTimeline({ date }: { date?: string }) {
 
   useEffect(() => { reload() }, [today])
 
-  if (runs.length === 0) return null
+  const visibleRuns = runs.filter(r => r.actual_seconds > 0)
+  if (visibleRuns.length === 0) return null
 
-  const doneCount = runs.filter(r => r.success).length
-  const totalDoneSecs = runs.filter(r => r.success).reduce((s, r) => s + r.actual_seconds, 0)
-  const totalWorkedSecs = runs.reduce((s, r) => s + r.actual_seconds, 0)
+  const doneCount = visibleRuns.filter(r => r.success).length
+  const totalDoneSecs = visibleRuns.filter(r => r.success && r.count_in_effective !== false).reduce((s, r) => s + r.actual_seconds, 0)
+  const totalWorkedSecs = visibleRuns.filter(r => r.count_in_effective !== false).reduce((s, r) => s + r.actual_seconds, 0)
 
   return (
     <div className="bg-card rounded-2xl border border-border p-5 space-y-3">
@@ -209,7 +220,7 @@ export function DayTimeline({ date }: { date?: string }) {
 
       {/* 任务列表 */}
       <div className="divide-y divide-border/50">
-        {runs.map(r => (
+        {visibleRuns.map(r => (
           <RunRow
             key={r.task_id + r.started_at}
             run={r}
@@ -224,7 +235,7 @@ export function DayTimeline({ date }: { date?: string }) {
       {/* 底部汇总 */}
       <div className="pt-1 border-t border-border flex items-center justify-between">
         <span className="text-xs text-muted-foreground">
-          今日完成 {doneCount} 个 · 共执行 {runs.length} 次
+          今日完成 {doneCount} 个 · 共执行 {visibleRuns.length} 次
         </span>
         <span className="text-sm font-bold text-primary tabular-nums">
           专注 {fmtDuration(totalDoneSecs)}
