@@ -128,7 +128,7 @@ npm run dev
 | 任务结果 | `run_status` | `none` / `running_failed` / `completed` |
 | 工作段 | work block | 可配置的专注时长（默认 30 分钟） |
 | 休息预算 | rest budget | 暂停时消耗；可配置（默认 5 分钟）；耗尽则失败；以剩余时间（mm:ss）显示 |
-| 结束原因 | `end_reason` | `complete`=跑到终点 / `early`=提前完成 / `giveup`=中断 / `failed`=被追上 |
+| 结束原因 | `end_reason` | `complete`=跑到终点 / `early`=提前完成 / `giveup`=中断 / `failed`=力竭倒下 |
 | 有效学习时间 | effective time | 实际口径（actual_seconds）或计划口径（min(actual, task_hours×3600)） |
 | 排除日 | excluded date | 手动标记不计入目标计算的日期，需填写理由 |
 | 学习目标 | goal | 爬坡机制：每日单阈值，达标+step_mins，连续未达标超限则降级 |
@@ -180,12 +180,11 @@ npm run dev
 
 ### 任务追踪（已实现）
 - hover 任务 → ▶ 开始 → 3-2-1 倒计时（显示任务时长 + 初始休息预算）→ 全屏追逐跑道
-- **像素风跑道**：box-shadow 点阵 sprite，小人/怪兽有跑步动画（200ms 帧切换）
-- 小人向右冲刺，怪兽从后追赶；暂停时怪兽逼近
+- **圆形跑道**：小人沿圆环奔跑，进度对应圆弧角度，帧动画切换 emoji
 - 暂停时：消耗休息预算（右下角 mm:ss 倒计时，不足 60s 变红）
 - **工作/休息可配置**：Tasks 页顶部计时器按钮打开设置，`work_mins` / `rest_mins` 存 config.json
 - 休息预算耗尽 → 失败；到达终点 → 完成；可随时点「⚡ 提前完成」或「中断任务」
-- 结果页区分 4 种结局：🏆 完成 / ⚡ 提前完成 / 🚩 中断（显示完成%）/ 💀 被追上
+- 结果页区分 4 种结局：🏆 完成 / ⚡ 提前完成 / 🚩 中断（显示完成%）/ 💀 力竭倒下
 - 无论成功/失败/中断，均保存执行记录到时间轴（`source=runner`）
 - 失败/中断任务在列表中划线显示，不消失，可重试
 

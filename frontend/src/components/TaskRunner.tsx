@@ -62,10 +62,9 @@ function Countdown({ onDone, task, restBudgetSecs, workMins, restMins, isResume 
 }
 
 // ── 圆形跑道组件 ─────────────────────────────────────────────
-// 小人和怪兽沿圆环跑道运动，进度对应圆弧角度
+// 小人沿圆环跑道运动，进度对应圆弧角度
 function Track({
   runnerPct,
-  monsterPct,
   restSecsLeft,
   totalRestBudget,
   paused,
@@ -73,7 +72,6 @@ function Track({
   frame,
 }: {
   runnerPct: number
-  monsterPct: number
   restSecsLeft: number
   totalRestBudget: number
   paused: boolean
@@ -86,8 +84,7 @@ function Track({
   const R = 108           // 跑道半径
   const STROKE = 14       // 跑道宽度
 
-  const gap = runnerPct - monsterPct
-  const danger = gap < 15
+  const lowRest = restSecsLeft < 60
 
   // 把百分比转成圆周上的坐标（从顶部 -90° 顺时针）
   function pctToXY(pct: number, r = R) {
@@ -107,15 +104,12 @@ function Track({
     return `M ${start.x} ${start.y} A ${r} ${r} 0 ${large} 1 ${end.x} ${end.y}`
   }
 
-  const runnerPos  = pctToXY(Math.min(runnerPct, 99))
-  const monsterPos = pctToXY(Math.max(0, monsterPct))
-  const restPct    = totalRestBudget > 0 ? restSecsLeft / totalRestBudget : 1
-  const restM      = Math.floor(restSecsLeft / 60)
-  const restS      = Math.floor(restSecsLeft % 60)
+  const runnerPos = pctToXY(Math.min(runnerPct, 99))
+  const restPct   = totalRestBudget > 0 ? restSecsLeft / totalRestBudget : 1
+  const restM     = Math.floor(restSecsLeft / 60)
+  const restS     = Math.floor(restSecsLeft % 60)
 
-  // 跑步动画：emoji 在奇偶帧间交替
-  const runnerEmoji  = paused ? '🧍' : isResting ? '🚶' : (frame % 4 < 2 ? '🏃' : '🏃')
-  const monsterEmoji = danger ? (frame % 4 < 2 ? '👾' : '👾') : '🐲'
+  const runnerEmoji = paused ? '🧍' : isResting ? '🚶' : (frame % 4 < 2 ? '🏃' : '🏃')
 
   return (
     <div className="flex flex-col items-center gap-4">
@@ -135,7 +129,7 @@ function Track({
             <path
               d={arcPath(0, Math.min(runnerPct, 99.9))}
               fill="none"
-              stroke={danger && paused ? '#fca5a5' : 'hsl(var(--primary))'}
+              stroke={lowRest && paused ? '#fca5a5' : 'hsl(var(--primary))'}
               strokeWidth={STROKE}
               strokeLinecap="round"
               style={{ transition: 'stroke 0.5s' }}
@@ -156,16 +150,6 @@ function Track({
             x={CX} y={CY - R - STROKE / 2 - 4}
             textAnchor="middle" fontSize={16} dominantBaseline="auto"
           >🏁</text>
-
-          {/* 怪兽 */}
-          <text
-            x={monsterPos.x} y={monsterPos.y}
-            textAnchor="middle" dominantBaseline="middle"
-            fontSize={danger ? 20 : 18}
-            style={{ transition: 'all 0.4s linear', filter: danger ? 'drop-shadow(0 0 4px #ef4444)' : 'none' }}
-          >
-            {monsterEmoji}
-          </text>
 
           {/* 小人 */}
           <text
@@ -249,7 +233,7 @@ function ResultPage({
     complete: { emoji: '🏆', title: '任务完成！', barClass: 'from-green-300 to-emerald-400' },
     early:    { emoji: '⚡', title: '提前完成！', note: '你比计划更快完成了任务。', barClass: 'from-sky-300 to-blue-400' },
     giveup:   { emoji: '🚩', title: '中断任务', note: `已完成 ${workedPct.toFixed(0)}%，本次记录已保存。`, barClass: 'from-amber-300 to-orange-400' },
-    failed:   { emoji: '💀', title: '被追上了…', note: '休息时间耗尽，怪兽追上了你。', barClass: 'from-rose-400 to-red-500' },
+    failed:   { emoji: '💀', title: '力竭倒下…', note: '休息时间耗尽，没能坚持到终点。', barClass: 'from-rose-400 to-red-500' },
   }
 
   const info = RESULT_INFO[endReason]
@@ -344,7 +328,6 @@ interface RunState {
   paused: boolean
   isResting: boolean      // 是否在自动休息段
   runnerPct: number       // 0-100
-  monsterPct: number      // 0-100
   success: boolean
   ended: boolean
 }
@@ -391,7 +374,6 @@ export function TaskRunner({
     paused: false,
     isResting: false,
     runnerPct: initRunnerPct,
-    monsterPct: Math.max(0, initRunnerPct - 25),
     success: false,
     ended: false,
   })
@@ -433,13 +415,9 @@ export function TaskRunner({
     if (s.ended) return
 
     if (s.paused) {
-      // 暂停时：怪兽逼近，消耗休息预算
+      // 暂停时：消耗休息预算
       s.restSecsLeft = Math.max(0, s.restSecsLeft - delta)
       s.pausedSecs += delta
-
-      // 怪兽向小人逼近（暂停期间追赶速度）
-      const catchSpeed = (s.runnerPct - s.monsterPct) / Math.max(s.restSecsLeft + delta, 1)
-      s.monsterPct = Math.min(s.runnerPct, s.monsterPct + catchSpeed * delta * 3)
 
       if (s.restSecsLeft <= 0) {
         // 失败：休息时间耗尽
@@ -461,10 +439,6 @@ export function TaskRunner({
       // 进度：已工作时间 / 总任务时间
       const progress = Math.min(s.workedSecs / totalSecs, 1)
       s.runnerPct = 2 + progress * 90  // 2% ~ 92%
-
-      // 怪兽缓慢跟随（工作时保持距离，暂停时才拉近）
-      const targetMonster = Math.max(0, s.runnerPct - 25)
-      s.monsterPct += (targetMonster - s.monsterPct) * delta * 0.05
 
       // 累计工作时间增加休息预算
       s.totalRestBudget = restSecsConst * Math.ceil(s.workedSecs / workSecsConst + 1)
@@ -595,7 +569,6 @@ export function TaskRunner({
         {/* 圆形跑道 */}
         <Track
           runnerPct={display.runnerPct}
-          monsterPct={display.monsterPct}
           restSecsLeft={display.restSecsLeft}
           totalRestBudget={display.totalRestBudget}
           paused={display.paused}
