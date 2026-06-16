@@ -539,16 +539,15 @@ function RoutineSettingsModal({
   onClose,
 }: {
   data: RoutinesData
-  onSave: (s: { max_routines: number; fail_days_limit: number }) => Promise<void>
+  onSave: (s: { fail_days_limit: number }) => Promise<void>
   onClose: () => void
 }) {
-  const [maxR, setMaxR]   = useState(data.max_routines)
   const [failD, setFailD] = useState(data.fail_days_limit)
   const [saving, setSaving] = useState(false)
 
   async function save() {
     setSaving(true)
-    try { await onSave({ max_routines: maxR, fail_days_limit: failD }) }
+    try { await onSave({ fail_days_limit: failD }) }
     finally { setSaving(false) }
   }
 
@@ -568,15 +567,9 @@ function RoutineSettingsModal({
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium">同时上限</p>
-                <p className="text-[11px] text-muted-foreground">最多同时进行几个常规任务</p>
+                <p className="text-[11px] text-muted-foreground">养成习惯解锁更多槽位，失败则减少</p>
               </div>
-              <div className="flex items-center gap-1.5">
-                <input type="number" min={1} max={10}
-                  value={maxR} onChange={e => setMaxR(Number(e.target.value))}
-                  className="w-14 h-8 rounded-lg border border-input bg-background px-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-ring/40"
-                />
-                <span className="text-xs text-muted-foreground">个</span>
-              </div>
+              <span className="text-sm font-semibold text-violet-500">{data.max_routines} 个</span>
             </div>
             <div className="flex items-center justify-between">
               <div>

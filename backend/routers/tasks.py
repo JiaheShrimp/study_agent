@@ -650,7 +650,7 @@ class RoutineCreate(BaseModel):
     allow_makeup: bool = False
 
 class RoutineSettings(BaseModel):
-    max_routines: int
+    max_routines: int          # 只读，由系统自动管理
     fail_days_limit: int
 
 
@@ -696,7 +696,9 @@ def _routine_to_model(r: dict, fail_days_limit: int) -> dict:
 
 
 def _archive_routine(r: dict, reason: str, data: dict) -> None:
-    """将常规任务移入 archived_routines。"""
+    """将常规任务移入 archived_routines，并自动调整 max_routines。
+    完成 → 上限 +1；失败 → 上限 -1（最低 3）。
+    """
     archived = {
         "id": r["id"],
         "content": r.get("content", ""),
@@ -711,6 +713,11 @@ def _archive_routine(r: dict, reason: str, data: dict) -> None:
     }
     data.setdefault("archived_routines", []).append(archived)
     data["routines"] = [x for x in data["routines"] if x["id"] != r["id"]]
+    current = data.get("max_routines", 3)
+    if reason == "completed":
+        data["max_routines"] = current + 1
+    elif reason == "failed":
+        data["max_routines"] = max(3, current - 1)
 
 
 @router.get("/routines", response_model=dict)
@@ -772,10 +779,13 @@ def restart_routine(routine_id: str):
     return _routine_to_model(new_routine, data["fail_days_limit"])
 
 
+class RoutineSettingsUpdate(BaseModel):
+    fail_days_limit: int
+
 @router.put("/routines/settings", response_model=RoutineSettings)
-def update_routine_settings(body: RoutineSettings):
+def update_routine_settings(body: RoutineSettingsUpdate):
     data = load_routines()
-    data["max_routines"] = max(1, min(10, body.max_routines))
+    # max_routines 由系统自动管理，不接受用户修改
     data["fail_days_limit"] = max(1, min(30, body.fail_days_limit))
     save_routines(data)
     return RoutineSettings(max_routines=data["max_routines"], fail_days_limit=data["fail_days_limit"])

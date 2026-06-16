@@ -263,7 +263,7 @@ export const api = {
   },
   routines: {
     get: () => get<RoutinesData>('/tasks/routines'),
-    updateSettings: (s: RoutineSettings) =>
+    updateSettings: (s: { fail_days_limit: number }) =>
       post<RoutineSettings>('/tasks/routines/settings', s, 'PUT'),
     create: (r: { content: string; hours: number; stars: number; target_days: number; allow_makeup: boolean }) =>
       post<RoutineTask>('/tasks/routines', r),
