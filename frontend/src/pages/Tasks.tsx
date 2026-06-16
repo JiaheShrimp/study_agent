@@ -138,9 +138,12 @@ function TaskAnalysisDrawer({ onClose }: { onClose: () => void }) {
     excluded: d.excluded,
   }))
 
-  const totalHours = data.reduce((s, d) => s + d.effective_secs, 0) / 3600
-  const totalScore = data.reduce((s, d) => s + d.score, 0)
-  const activeDays = data.filter(d => d.effective_secs > 0).length
+  const activeDays  = data.filter(d => d.effective_secs > 0).length
+  const bestHours   = Math.max(...data.map(d => d.effective_secs), 0) / 3600
+  const bestScore   = Math.max(...data.map(d => d.score), 0)
+  const avgHours    = activeDays > 0
+    ? data.reduce((s, d) => s + d.effective_secs, 0) / activeDays / 3600
+    : 0
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -174,9 +177,9 @@ function TaskAnalysisDrawer({ onClose }: { onClose: () => void }) {
               {/* 汇总数据 */}
               <div className="grid grid-cols-3 gap-3">
                 {[
-                  { label: '累计学习', value: `${totalHours.toFixed(1)}h` },
-                  { label: '累计得分', value: `${totalScore}★` },
-                  { label: '活跃天数', value: `${activeDays}天` },
+                  { label: '最佳单日', value: `${bestHours.toFixed(1)}h` },
+                  { label: '最高得分', value: `${bestScore}★` },
+                  { label: '日均学习', value: `${avgHours.toFixed(1)}h` },
                 ].map(item => (
                   <div key={item.label} className="bg-secondary/60 rounded-xl p-3 text-center">
                     <p className="text-base font-bold text-foreground">{item.value}</p>
