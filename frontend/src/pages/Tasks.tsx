@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Check, Trash2, Plus, Settings, Star, Clock, Swords, X, Play, Timer, Flame, AlertTriangle, Trophy, RotateCcw, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react'
+import { Check, Trash2, Plus, Settings, Star, Clock, Swords, X, Play, Timer, Flame, AlertTriangle, Trophy, RotateCcw, ChevronLeft, ChevronRight, CalendarDays, BarChart2 } from 'lucide-react'
 import { api, type DailyTask, type DailyBounty, type WorkRestConfig, type RoutineTask, type RoutinesData, type ArchivedRoutine } from '@/lib/api'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
 type TaskRun = Awaited<ReturnType<typeof api.tasks.runs>>[number]
 import { cn, gameToday } from '@/lib/utils'
@@ -111,6 +112,134 @@ function StarPicker({ value, onChange }: { value: number; onChange: (v: number) 
             n <= value ? 'text-amber-400 fill-amber-400' : 'text-border')} />
         </button>
       ))}
+    </div>
+  )
+}
+
+// ── 学习分析抽屉 ──────────────────────────────────────────────
+type AnalysisRange = 7 | 30
+
+function TaskAnalysisDrawer({ onClose }: { onClose: () => void }) {
+  const [range, setRange] = useState<AnalysisRange>(7)
+  const [data, setData]   = useState<{ date: string; effective_secs: number; score: number; excluded: boolean }[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.study.historyStats(range)
+      .then(setData)
+      .finally(() => setLoading(false))
+  }, [range])
+
+  const chartData = data.map(d => ({
+    date: d.date.slice(5),   // MM-DD
+    hours: +(d.effective_secs / 3600).toFixed(2),
+    score: d.score,
+    excluded: d.excluded,
+  }))
+
+  const totalHours = data.reduce((s, d) => s + d.effective_secs, 0) / 3600
+  const totalScore = data.reduce((s, d) => s + d.score, 0)
+  const activeDays = data.filter(d => d.effective_secs > 0).length
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-foreground/15 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-sm h-full bg-card shadow-2xl flex flex-col overflow-hidden">
+        {/* 头部 */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+          <span className="text-sm font-semibold">学习分析</span>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+          {/* 时间范围切换 */}
+          <div className="flex gap-1 bg-secondary rounded-xl p-1">
+            {([7, 30] as AnalysisRange[]).map(r => (
+              <button key={r} onClick={() => setRange(r)}
+                className={cn('flex-1 text-xs py-1.5 rounded-lg font-medium transition-all',
+                  range === r ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+                )}>
+                近 {r} 天
+              </button>
+            ))}
+          </div>
+
+          {loading ? (
+            <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">加载中…</div>
+          ) : (
+            <>
+              {/* 汇总数据 */}
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: '累计学习', value: `${totalHours.toFixed(1)}h` },
+                  { label: '累计得分', value: `${totalScore}★` },
+                  { label: '活跃天数', value: `${activeDays}天` },
+                ].map(item => (
+                  <div key={item.label} className="bg-secondary/60 rounded-xl p-3 text-center">
+                    <p className="text-base font-bold text-foreground">{item.value}</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">{item.label}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* 学习时间趋势 */}
+              <div>
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">每日学习时间（h）</p>
+                <ResponsiveContainer width="100%" height={130}>
+                  <BarChart data={chartData} barSize={range === 7 ? 14 : 6}>
+                    <XAxis dataKey="date" tick={{ fontSize: 9 }} tickLine={false} axisLine={false}
+                      interval={range === 30 ? 4 : 0} />
+                    <YAxis hide />
+                    <Tooltip
+                      formatter={(v: number) => [`${v}h`, '学习时间']}
+                      contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                    />
+                    <Bar dataKey="hours" radius={[3, 3, 0, 0]}>
+                      {chartData.map((entry, i) => (
+                        <Cell key={i}
+                          fill={entry.excluded ? 'hsl(var(--muted-foreground) / 0.3)' : 'hsl(var(--primary) / 0.8)'}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* 得分趋势 */}
+              <div>
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">每日得分（★）</p>
+                <ResponsiveContainer width="100%" height={130}>
+                  <BarChart data={chartData} barSize={range === 7 ? 14 : 6}>
+                    <XAxis dataKey="date" tick={{ fontSize: 9 }} tickLine={false} axisLine={false}
+                      interval={range === 30 ? 4 : 0} />
+                    <YAxis hide />
+                    <Tooltip
+                      formatter={(v: number) => [`${v}★`, '得分']}
+                      contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                    />
+                    <Bar dataKey="score" radius={[3, 3, 0, 0]}>
+                      {chartData.map((entry, i) => (
+                        <Cell key={i}
+                          fill={entry.score > 0 ? '#f59e0b' : 'hsl(var(--secondary))'}
+                          opacity={entry.excluded ? 0.35 : 0.85}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* 排除日说明 */}
+              {data.some(d => d.excluded) && (
+                <p className="text-[10px] text-muted-foreground/60 text-center">灰色柱为已排除日期，不计入目标统计</p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -910,6 +1039,7 @@ export function Tasks() {
   const [runningTask, setRunningTask] = useState<DailyTask | null>(null)
   const [workRestCfg, setWorkRestCfg]   = useState<WorkRestConfig>({ work_mins: 30, rest_mins: 5 })
   const [timerModal, setTimerModal]     = useState(false)
+  const [analysisOpen, setAnalysisOpen] = useState(false)
   const [routinesData, setRoutinesData] = useState<RoutinesData>({ max_routines: 3, fail_days_limit: 3, routines: [] })
   const [multiplier, setMultiplier] = useState(1.0)
   const [addRoutineModal, setAddRoutineModal]         = useState(false)
@@ -1040,6 +1170,10 @@ export function Tasks() {
                 <Timer className="h-3.5 w-3.5" /> {workRestCfg.work_mins}m/{workRestCfg.rest_mins}m
               </button>
             )}
+            <button onClick={() => setAnalysisOpen(true)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground border border-border rounded-lg px-3 py-1.5 hover:bg-secondary transition-colors">
+              <BarChart2 className="h-3.5 w-3.5" /> 分析
+            </button>
             <Link to="/tasks/manage"
               className="flex items-center gap-1.5 text-xs text-muted-foreground border border-border rounded-lg px-3 py-1.5 hover:bg-secondary transition-colors">
               <Settings className="h-3.5 w-3.5" /> 管理
@@ -1308,6 +1442,9 @@ export function Tasks() {
           onClose={() => setRoutineSettingsModal(false)}
         />
       )}
+
+      {/* 学习分析抽屉 */}
+      {analysisOpen && <TaskAnalysisDrawer onClose={() => setAnalysisOpen(false)} />}
 
       {/* 计时设置弹窗 */}
       {timerModal && (

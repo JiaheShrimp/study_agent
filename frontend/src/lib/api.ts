@@ -253,6 +253,10 @@ export const api = {
       post<{ mode: string }>('/config/effective-time-mode', { mode }, 'PUT'),
   },
   study: {
+    historyStats: (days: number) =>
+      get<{ date: string; effective_secs: number; score: number; excluded: boolean }[]>(
+        `/tasks/history-stats?days=${days}`
+      ),
     dailyStats: (date?: string) =>
       get<DailyStats>(`/tasks/daily-stats${date ? `?date=${date}` : ''}`),
     setExclude: (reason: string, date?: string) =>

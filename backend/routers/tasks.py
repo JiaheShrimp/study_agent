@@ -1094,6 +1094,33 @@ def set_exclude(date: str | None = None, body: ExcludeBody = ExcludeBody()):
     return _make_daily_stats(today, excluded, mode)
 
 
+@router.get("/history-stats")
+def get_history_stats(days: int = 7):
+    """返回最近 N 天每天的学习时间（秒）和得分，用于趋势图。"""
+    import os as _os_h
+    from datetime import timedelta as _td_h
+    days = max(1, min(90, days))
+    cfg = load_config()
+    mode = cfg.get("effective_time_mode", "actual")
+    excluded = load_excluded_dates()
+    runs_path = _os_h.path.join(DATA_DIR, "task_runs.json")
+    all_runs: list = _read(runs_path, [])
+    today = Date.fromisoformat(_game_today())
+    result = []
+    for i in range(days - 1, -1, -1):
+        d = str(today - _td_h(days=i))
+        day_runs = [r for r in all_runs if r.get("date") == d and r.get("started_at")]
+        effective = _calc_effective_secs(day_runs, mode)
+        score = sum(r.get("score", 0) for r in day_runs if r.get("success"))
+        result.append({
+            "date": d,
+            "effective_secs": effective,
+            "score": score,
+            "excluded": d in excluded,
+        })
+    return result
+
+
 @router.get("/goal", response_model=GoalResult)
 def get_daily_goal():
     """获取今日目标（自动结算昨天达成情况）。"""
