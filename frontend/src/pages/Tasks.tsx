@@ -8,7 +8,7 @@ type TaskRun = Awaited<ReturnType<typeof api.tasks.runs>>[number]
 import { cn, gameToday } from '@/lib/utils'
 import { TaskRunner } from '@/components/TaskRunner'
 import { StudyGoalCard } from '@/components/StudyGoalCard'
-import { playBountyAppear, playClick } from '@/lib/sounds'
+import { playBountyAppear, playClick, playTaskDone } from '@/lib/sounds'
 
 // ── 工具 ─────────────────────────────────────────────────────
 function daysInMonth(y: number, m: number) { return new Date(y, m + 1, 0).getDate() }
@@ -1120,8 +1120,9 @@ export function Tasks() {
     reload(selectedDate)
     api.tasks.dailyDates().then(d => setDatesWithTasks(new Set(d))).catch(() => {})
   }
-  async function handleToggle(id: string) {
+  async function handleToggle(id: string, currentDone: boolean) {
     await api.tasks.toggleDone(id)
+    if (!currentDone) playTaskDone()
     reload(selectedDate)
     setStudyRefreshKey(k => k + 1)
   }
@@ -1378,7 +1379,7 @@ export function Tasks() {
                     readOnly={!isToday}
                     completePct={completePct}
                     score={taskScore}
-                    onToggle={() => isToday && handleToggle(t.id)}
+                    onToggle={() => isToday && handleToggle(t.id, t.done)}
                     onDelete={() => handleDelete(t.id)}
                     onUpdate={u => handleUpdate(t.id, u)}
                     onStart={() => {

@@ -103,6 +103,14 @@ export function playClick() {
   tone(600, t, 0.05, 0.06, 'sine')
 }
 
+// 任务勾选完成——轻快两音上扬
+export function playTaskDone() {
+  const c = getCtx()
+  const t = c.currentTime
+  tone(523, t,        0.12, 0.1, 'sine')   // C5
+  tone(784, t + 0.1,  0.18, 0.12, 'sine')  // G5
+}
+
 // 赏金任务弹出——神秘感强的低→高两音 + 铃声
 export function playBountyAppear() {
   const c = getCtx()
