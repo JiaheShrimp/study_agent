@@ -114,7 +114,11 @@ export function ChatSidebar() {
     setTurns(prev => [...prev, optimistic])
     startThinking()
     try {
-      await api.ai.chat(msg)
+      const res = await api.ai.chat(msg)
+      // 搭子按指令派了赏金任务 → 通知任务页尽快刷新展示
+      if (res?.assigned_bounty) {
+        window.dispatchEvent(new CustomEvent('agent:bounty-refresh'))
+      }
       // 用服务端权威历史覆盖（含真实 id 和搭子回复）
       await refresh()
     } catch {

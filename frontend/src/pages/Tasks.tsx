@@ -1178,7 +1178,17 @@ export function Tasks() {
     }
     checkPending()
     const id = setInterval(checkPending, 60_000)
-    return () => clearInterval(id)
+    // 聊天里搭子按指令派了赏金任务 → 立即刷新几次，不必干等下一轮
+    const onBounty = () => {
+      checkPending()
+      window.setTimeout(checkPending, 800)
+      window.setTimeout(checkPending, 2000)
+    }
+    window.addEventListener('agent:bounty-refresh', onBounty)
+    return () => {
+      clearInterval(id)
+      window.removeEventListener('agent:bounty-refresh', onBounty)
+    }
   }, [isToday])
 
   async function handleAdd(t: { content: string; hours: number; stars: number; count_in_effective: boolean; keep: boolean }) {

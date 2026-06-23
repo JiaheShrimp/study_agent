@@ -360,7 +360,8 @@ export const api = {
       post<{ ok: boolean; available: boolean }>('/ai/config', { model: '', custom_base_url: '', ...cfg }, 'PUT'),
     // 搭子对话：聊天栏轮询拉取历史 + 用户主动发消息
     dialogue: (limit = 50) => get<DialogueTurn[]>(`/ai/dialogue?limit=${limit}`),
-    chat: (message: string) => post<{ reply: DialogueTurn }>('/ai/chat', { message }),
+    chat: (message: string) =>
+      post<{ reply: DialogueTurn; assigned_bounty: boolean }>('/ai/chat', { message }),
   },
   spinner: {
     list: () => get<Spinner[]>('/spinner'),

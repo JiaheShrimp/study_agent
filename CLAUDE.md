@@ -474,6 +474,8 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - [x] 可赢目标（赢麻了页面挂「未来可赢」带星级，赢一次累计连续/次数 + 按星级写当日记录，赢太多了归档进历史，winnables.json）
 - [x] 保留任务（每日任务可勾「保留任务」跨天不消失，init 时迁移过往未完成的保留任务到今天，计算/显示/计时与普通任务一致）
 - [x] 搭子聊天栏按天清零（GET /dialogue 只返回今天，全量历史保留后台；记忆 = 今天 16 条 + 更早随机抽样 6 条；业务数据全量喂 AI）
+- [x] AI 派发赏金更人性化（喂完整画像 + 任务频次，搭子口吻派任务 + 派发理由 reason）
+- [x] 聊天工具调用第一期（聊天里跟搭子要任务，AI 判断意图后落地赏金任务，白名单 + 严格校验 + 即时刷新）
 
 **待开发**：
 - [ ] Buff 效果实际结算接入（task_score / daily_score / goal_shield / routine_double / lucky_dice）
@@ -546,20 +548,29 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - 检测到新 assistant 消息（对比最后 id）播 `playChatMessage()` 提示音（首次加载不播）。
 - **「正在思考」动画**：发消息 / 收到 `agent:dialogue-refresh` 时显示三点跳动气泡（CSS `animate-typing-dot`，在 `index.css`），新反馈到达时收尾；30s 超时兜底自动关，防止反馈不来时一直转。
 
+#### 聊天里的工具调用：搭子能按指令派任务（已实现，第一期）
+
+聊天不再只会回话。`POST /ai/chat` 每次先让搭子判断你是想**聊天**还是想**要任务**：
+- 走 `_chat_react()` + `_TOOL_SYSTEM`（在 `SUPERVISOR_SYSTEM` 后追加工具说明），让 AI **只返回一个 JSON**：`{"action":"chat","reply":...}` 或 `{"action":"assign_task","content","hours","stars","reply":...}`
+- `assign_task` 且校验通过 → 调 `routers/tasks.append_bounty_task()` 落地成一个**赏金任务**（和随机弹出的赏金完全一样：带 buff、走 `accepted→done`，区别只是 `popup_at=now` 立即可见、由你开口要触发）。reply 用 AI 给的那句确认
+- **安全**：工具白名单第一期只有 `assign_task`；`append_bounty_task` 严格 clamp（hours 0.25~8、stars 1~5、content 非空截断）；AI 返回非 JSON / 不可用 → 降级为普通闲聊，绝不误派
+- **前端联动**：`ChatOut.assigned_bounty=True` 时，ChatSidebar 派发 `agent:bounty-refresh`，Tasks 页监听后立即（0/0.8/2s）刷新 `pendingBounties`，新赏金马上出现，不必等 60s 轮询
+
 #### 触发点
 
 | trigger | 概率 | 位置 / 说明 |
 |---------|------|------|
 | `win_created` | **1.0（必触发）** | `routers/wins.py` 记录赢麻了后。操作信息只作为 `context` 传给 AI 当背景，**不写进对话历史、不在聊天框显示成 user 气泡**（聊天框只出现搭子反馈） |
-| `chat` | —（用户主动） | `POST /ai/chat` |
+| `chat` | —（用户主动） | `POST /ai/chat`，带工具能力（可派任务，见上） |
 
 #### 待接入触发点（后续逐步实现）
 
 - 任务完成 / 提前完成 / 力竭、常规打卡里程碑（`routers/tasks.py`）
 - 每日首次打开
-- 聊天栏里直接操作 agent（需 agent loop + 工具调用，暂未做）
+- 更多聊天工具（送 buff、调目标等；目前只有 assign_task）
 
 #### 实现文件
 
 - 后端：`routers/ai.py`（搭子核心 + dialogue/chat 接口）+ `storage/ai_dialogue.py`（对话历史/记忆）+ `supervisor_context.py`（业务数据聚合 + 随机抽样）+ `ai_client.chat_messages()`（多轮）+ `storage/tasks.py` 的 `load_task_runs()`
-- 前端：`components/ChatSidebar.tsx`（聊天栏 + 思考动画）+ `AppLayout` 左侧挂载 + `api.ts` 的 `ai.dialogue / ai.chat` + `sounds.ts` 的 `playChatMessage()` + `index.css` 的 `animate-typing-dot` + `pages/Wins.tsx` 记录后派发 `agent:dialogue-refresh`
+- 前端：`components/ChatSidebar.tsx`（聊天栏 + 思考动画，派任务后派发 `agent:bounty-refresh`）+ `AppLayout` 左侧挂载 + `api.ts` 的 `ai.dialogue / ai.chat` + `sounds.ts` 的 `playChatMessage()` + `index.css` 的 `animate-typing-dot` + `pages/Wins.tsx` 记录后派发 `agent:dialogue-refresh` + `pages/Tasks.tsx` 监听 `agent:bounty-refresh` 立即刷新赏金
+- 聊天工具调用：`routers/ai.py` 的 `_chat_react()` / `_TOOL_SYSTEM` + `routers/tasks.py` 的 `append_bounty_task()`（复用赏金落地）

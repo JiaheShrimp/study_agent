@@ -211,30 +211,114 @@ class ChatIn(BaseModel):
 
 class ChatOut(BaseModel):
     reply: DialogueTurn
+    assigned_bounty: bool = False   # 本次是否派发了赏金任务（前端据此刷新任务页）
+
+
+# ── 聊天里的「工具调用」：让搭子能按你的指令动手 ──────────────────
+#
+# 聊天不再只是回话。每次发消息，搭子先判断你是想聊天还是想让它做事：
+#   - 想聊天 → 照常回一句话（action=chat）
+#   - 想要任务 → 返回 action=assign_task，后端校验后落地成一个「赏金任务」
+#     （和随机弹出的赏金完全一样：带 buff、走 accepted→done，只是立刻可见），
+#     再回你一句确认。
+#
+# 第一期工具白名单只有 assign_task。安全靠：白名单 + 严格校验 + 落地复用现有结构。
+
+_TOOL_SYSTEM = (
+    SUPERVISOR_SYSTEM
+    + "\n\n———\n"
+    "另外，你现在能帮他「派任务」。请判断他这条消息是想随便聊聊，还是想让你给他派/安排一个任务"
+    "（比如他说『给我派个任务』『安排点事做』『来个学习任务』『我想做点XX』之类）。\n"
+    "**只返回一个 JSON 对象**，两种之一：\n"
+    "1) 纯聊天：{\"action\":\"chat\",\"reply\":\"你要说的那句话\"}\n"
+    "2) 派任务：{\"action\":\"assign_task\",\"content\":\"任务内容\",\"hours\":1.0,\"stars\":3,"
+    "\"reply\":\"派完后跟他说的一句话\"}\n"
+    "派任务规则：content 具体可执行；hours 在 0.25~4 之间；stars 整数 1~5；"
+    "结合你对他的了解派对他有意义的事，别套路。拿不准他是否想要任务时，就当聊天。\n"
+    "reply 始终是朋友口吻的一句话（≤40字）。只输出 JSON，不要多余文字。"
+)
+
+
+def _chat_react(user_msg: str) -> tuple[str, dict | None]:
+    """
+    带工具能力地处理一条用户消息。
+
+    返回 (reply_text, assigned_bounty_or_None)。
+    - AI 不可用/解析失败 → 降级为普通文字闲聊，不派任务。
+    - action=assign_task 且校验通过 → 落地赏金任务，reply 用 AI 给的话。
+    """
+    if not ai_client.is_available():
+        return _generate(
+            "（请像朋友一样回复我上面这条消息，自然地接着聊。）",
+            fallback_pool=["嗯嗯，我在听。", "哈哈，说说看？", "我懂你的意思。", "这个我记下了。"],
+        ), None
+
+    messages = _history_messages(
+        "（这是我刚发给你的话，请按系统指示判断我是想聊天还是想要任务，返回对应 JSON。）"
+    )
+    import json as _json
+    raw = ai_client.chat_messages(messages, system=_TOOL_SYSTEM, max_tokens=800)
+    data = None
+    if raw:
+        text = raw.strip()
+        # 容错：抽取 ```json``` 或裸 JSON
+        import re as _re
+        m = _re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+        cand = m.group(1).strip() if m else text
+        try:
+            data = _json.loads(cand)
+        except Exception:
+            # 再试从第一个 { 到最后一个 }
+            try:
+                s, e = cand.find("{"), cand.rfind("}")
+                if s != -1 and e != -1:
+                    data = _json.loads(cand[s:e + 1])
+            except Exception:
+                data = None
+
+    # 解析失败 → 当普通闲聊：把整段文本当回复（去掉可能的 JSON 残留）
+    if not isinstance(data, dict):
+        reply = (raw or "").strip() if raw else ""
+        if not reply or reply.startswith("{"):
+            reply = random.choice(["嗯嗯，我在听。", "哈哈，说说看？", "我懂你的意思。"])
+        return reply, None
+
+    action = data.get("action", "chat")
+    reply = str(data.get("reply", "")).strip() or "好嘞。"
+
+    if action == "assign_task":
+        content = str(data.get("content", "")).strip()
+        if content:
+            try:
+                from routers.tasks import append_bounty_task
+                bounty = append_bounty_task(
+                    content=content,
+                    hours=data.get("hours", 1.0),
+                    stars=data.get("stars", 3),
+                    reason=reply,
+                )
+                return reply, bounty
+            except Exception:
+                # 落地失败不影响聊天，退化成普通回复
+                return reply, None
+    return reply, None
 
 
 @router.post("/chat", response_model=ChatOut)
 def chat(body: ChatIn):
     """
-    用户在聊天框主动发消息：存入对话历史 → 带历史生成回复 → 存回复 → 返回。
-    回复始终基于你俩的历史和全部业务数据，不只看这一句。
+    用户在聊天框主动发消息：存入对话历史 → 搭子带工具能力处理（可能派任务）
+    → 存回复 → 返回。回复始终基于你俩的历史和全部业务数据，不只看这一句。
+
+    若搭子判断你想要任务，会落地一个赏金任务（立即可见，前端轮询/事件刷新可见）。
     """
     msg = body.message.strip()
     if not msg:
         raise HTTPException(400, "消息不能为空")
     ai_dialogue.append_turn("user", msg)
-    # 用户消息已写进历史，_history_messages 会带上它；这里 extra_user 只放轻量指引
-    reply_text = _generate(
-        "（请像朋友一样回复我上面这条消息，结合你对我的了解，自然地接着聊。）",
-        fallback_pool=[
-            "嗯嗯，我在听。",
-            "哈哈，说说看？",
-            "我懂你的意思。",
-            "这个我记下了。",
-        ],
-    )
+    reply_text, bounty = _chat_react(msg)
     reply = ai_dialogue.append_turn("assistant", reply_text, trigger="chat")
-    return ChatOut(reply=DialogueTurn(**reply))
+    return ChatOut(reply=DialogueTurn(**reply), assigned_bounty=bounty is not None)
 
 
 class ProviderMeta(BaseModel):

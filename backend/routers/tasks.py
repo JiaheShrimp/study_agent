@@ -532,6 +532,42 @@ def generate_daily_bounties(date: str | None = None):
     return bounties
 
 
+def append_bounty_task(content: str, hours: float, stars: int, reason: str = "",
+                       date: str | None = None) -> dict:
+    """追加一个赏金任务到当日列表，立即可见（popup_at=现在）。
+
+    供「用户在聊天框主动要任务」复用：和随机赏金完全一样（带 buff、走
+    accepted→done 流程），区别只是触发方式是用户开口要、且立刻弹出。
+    返回新建的赏金 dict。
+    """
+    today = date or _game_today()
+    content = content.strip()[:100]
+    if not content:
+        raise ValueError("任务内容不能为空")
+    hours = max(0.25, min(8.0, float(hours)))
+    stars = max(1, min(5, int(stars)))
+
+    data = load_daily_bounties(today)
+    bounties = data.get("bounties", [])
+    bounty = {
+        "id": str(uuid.uuid4()),
+        "content": content,
+        "hours": hours,
+        "stars": stars,
+        "buff": random_buff(),
+        "status": "pending",
+        "popup_at": Datetime.now().isoformat(),  # 立即可见
+        "ai_generated": True,
+        "reason": reason.strip()[:40],
+    }
+    bounties.append(bounty)
+    # 保持 generated 标记不变（若今天还没生成过，这里也不触发随机生成）
+    data["bounties"] = bounties
+    data.setdefault("generated", True)
+    save_daily_bounties(today, data)
+    return bounty
+
+
 @router.get("/bounty/daily/pending", response_model=list[DailyBountyNew])
 def get_pending_bounties(date: str | None = None):
     """返回当前时刻已到弹出时间、且状态为 pending 的赏金任务。"""
