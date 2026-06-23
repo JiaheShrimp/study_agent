@@ -127,14 +127,14 @@ npm run dev
 | 计入有效时间 | `count_in_effective` | 任务及对应 task_run 上的布尔字段；`false` 时不计入有效学习时间统计，时间轴仍显示 |
 | 任务结果 | `run_status` | `none` / `running_failed` / `completed` |
 | 工作段 | work block | 可配置的专注时长（默认 30 分钟） |
-| 休息预算 | rest budget | 暂停时消耗；可配置（默认 5 分钟）；耗尽则失败；以剩余时间（mm:ss）显示 |
+| 休息预算 | rest budget | 总额 = 按预计时长换算（`预计时长 / work_mins × rest_mins`），开局一次性给满；暂停时消耗，耗尽则失败；以剩余时间（mm:ss）显示。例：1h 任务、每 30min 休息 5min → 10 分钟 |
 | 结束原因 | `end_reason` | `complete`=跑到终点 / `early`=提前完成 / `giveup`=中断 / `failed`=力竭倒下 |
 | 有效学习时间 | effective time | 实际口径（actual_seconds）或计划口径（min(actual, task_hours×3600)） |
 | 排除日 | excluded date | 手动标记不计入目标计算的日期，需填写理由 |
 | 学习目标 | goal | 爬坡机制：每日单阈值，达标+step_mins，连续未达标超限则降级 |
 | 奖励点数 | score | 每次任务完成后计算，失败/中断为 0 |
 | Buff | buff | 赏金任务必得、日常任务 20% 概率抽取的奖励加成 |
-| 补卡 | makeup | 常规任务昨天漏打、今天补上，streak 不断；需开启 `allow_makeup` |
+| 漏打结算 | settlement | 常规任务漏打的历史日，下次打开逐天结算为请假（excused）或中断（missed） |
 
 ---
 
@@ -169,21 +169,29 @@ npm run dev
 
 ### 常规任务（已实现）
 - 独立于每日任务的习惯养成模块，紫色/violet 主题区分
-- 每条常规任务有：内容、预计时长、重要程度、目标天数、是否允许补卡
+- 每条常规任务有：内容、预计时长、重要程度、目标天数
 - 打卡状态：今日已完成 / 未完成；`last_done_date` 存最近打卡日期
 - 连续打卡天数（`streak`）、历史最长连续、累计完成天数
 - **streak 计算**：从 log 全量重算（`_recalc_streak`），支持任意日期写入后结果一致
 - **连续失败警告**：创建日期后连续 N 天未打卡（`fail_days_limit`，用户可设）触发强制提示；创建当天不计入失败
 - 用户可设最大同时存在的常规任务数（`max_routines`，默认 3）
 - 常规任务按习惯维度统计，不按天统计（不出现在历史任务列表）
-- **补卡机制**：新建时可开启 `allow_makeup`；今天已打卡、昨天未打卡时，卡片显示「补昨天」按钮；补完后 streak 自动连续；该机会只有一天（后天不可再补昨天）；适合可重复执行的习惯，不适合每天只能做一次的习惯
+- **漏打结算（excused）**：放假/连续几天没打开 app 的日子既未打卡也未请假，属「未结算」状态，**不计入连续失败**（避免被误判归档）。下次打开时 `RoutineSettlement` 弹窗逐个任务、逐天提示用户结算：
+  - **正当请假**：写入 `routine.excused[day]=理由`，桥接 streak（前后打卡视为连续），不计入连续失败
+  - **算作中断**：写入 `routine.log[day]=False`，计入连续失败，连续超 `fail_days_limit` 触发归档
+  - `_count_fail_days` 跳过 excused 日和未结算日（`day not in log`），仅 `log[day] is False` 计失败
+  - `_recalc_streak` 中两次打卡之间若全是 excused 日则桥接连续
+  - 接口：`GET /tasks/routines/pending-settlement`（返回各任务待结算日期）、`POST /tasks/routines/{id}/settle`（批量提交某任务的结算项）
 
 ### 任务追踪（已实现）
-- hover 任务 → ▶ 开始 → 3-2-1 倒计时（显示任务时长 + 初始休息预算）→ 全屏追逐跑道
-- **圆形跑道**：小人沿圆环奔跑，进度对应圆弧角度，帧动画切换 emoji
+- hover 任务 → ▶ 开始 → 3-2-1 倒计时（显示任务时长 + 总休息预算）→ 全屏追逐跑道
+- **主计时器正计时**：从 0 开始累加「已用时间」（`workedSecs`），不是倒计时；进度环 = `已用 / 预计`，封顶 100%
+- **到达预计时间不结束**：`workedSecs ≥ totalSecs` 时触发到点提示（橙色横幅 + `playGoalReached()` 音效，`reachedRef` 防重复），**继续计时**进入超时态（`overtime=true`），等用户自己点「完成任务」才结束
+- **超时态视觉**：主时间数字 / 已完成% / 进度环 / 中央状态文字均变琥珀色，副标题显示「超出预计 mm:ss」
+- **圆形跑道**：小人沿圆环奔跑，进度对应圆弧角度，帧动画切换 emoji；超时后小人停在终点（runnerPct 封顶 92）
 - 暂停时：消耗休息预算（右下角 mm:ss 倒计时，不足 60s 变红）
 - **工作/休息可配置**：Tasks 页顶部计时器按钮打开设置，`work_mins` / `rest_mins` 存 config.json
-- 休息预算耗尽 → 失败；到达终点 → 完成；可随时点「⚡ 提前完成」或「中断任务」
+- 休息预算耗尽 → 失败（力竭）；完成按钮：未到预计时间点 = 提前完成（`early`，享加成），到点或超时点 = 正常完成（`complete`）；可随时「中断任务」
 - 结果页区分 4 种结局：🏆 完成 / ⚡ 提前完成 / 🚩 中断（显示完成%）/ 💀 力竭倒下
 - 无论成功/失败/中断，均保存执行记录到时间轴（`source=runner`）
 - 失败/中断任务在列表中划线显示，不消失，可重试
@@ -225,6 +233,7 @@ npm run dev
 | `playSlotComplete(m)` | 三轮全停后上行琶音，倍数越高音越高亢 |
 | `playWinRecord(level)` | 记录赢麻了成功，星级越高音符越多越响亮 |
 | `playBountyAppear()` | 赏金任务首次弹出，低→高神秘感三音 + 铃声余韵 |
+| `playGoalReached()` | 任务正计时达到预计时间，柔和上行三音（提醒可收尾，不打扰） |
 | `playClick()` | 通用按钮点击轻音 |
 
 **注意**：Web Audio API 需要用户交互后才能播放（浏览器限制），已在 `getCtx()` 中处理 suspended 状态。
@@ -318,9 +327,9 @@ backend/data/*.json
 - **爬坡目标结算**：`_settle_yesterday()` 在每次 `GET /tasks/goal` 时调用，检查昨日是否达标并更新状态
 - **历史任务只读**：Tasks 页切换到非今日日期时，所有编辑/添加/启动操作隐藏，`readOnly` prop 传入 TaskRow
 - **常规任务不按天统计**：routines 有自己的 log/streak，不出现在 daily_tasks 历史中
-- **常规任务 streak 重算**：`_recalc_streak()` 从 log 全量重算，保证补卡等任意日期写入后结果一致，不依赖增量逻辑
+- **常规任务 streak 重算**：`_recalc_streak()` 从 log 全量重算，保证结算等任意日期写入后结果一致，不依赖增量逻辑；请假日（excused）视为桥接
 - **常规任务 force_warning**：从 `created_date` 起算，创建前的日期不计入连续失败；避免新建当天就触发警告
-- **补卡条件**：`allow_makeup=True` + 今天已打 + 昨天未打 + 昨天 ≥ 创建日；派生字段 `makeup_available` 由后端计算，不存储
+- **漏打结算三态**：常规任务某历史日有三种状态——`log[day] is True`（打卡）、`log[day] is False`（确认中断，计失败）、`day in excused`（请假，桥接不计失败）；三者皆无则为「未结算」，`_count_fail_days` 暂不计失败，等用户在 `RoutineSettlement` 弹窗结算。这样「放假几天没开 app」不会被误判归档
 - **赏金弹窗去重**：`shownBountyIds` ref 记录会话内已弹过的 id，只有新 id 才触发自动弹窗和音效
 - **音效初始化**：`AudioContext` 懒创建，首次调用 `getCtx()` 时实例化，suspended 状态自动 resume
 - **中断任务为暂停态**：`end_reason=giveup` 对应 `run_status=paused`，不是失败；下次启动时取出最后一条 actual_seconds 作为 `initialWorkedSecs` 传入 TaskRunner，从已有进度继续
@@ -424,7 +433,7 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - [x] GitHub 仓库（https://github.com/JiaheShrimp/study_agent）
 - [x] 工作/休息时长可配置（Tasks 页计时器按钮，TaskRunner 接收 workMins/restMins props）
 - [x] 常规任务（紫色主题，连续打卡/目标天数/失败警告/数量上限）
-- [x] 常规任务补卡机制（allow_makeup 开关，今天打完可补昨天，streak 自动连续）
+- [x] 常规任务漏打结算（放假/没开 app 的日子不误判失败，下次打开逐天弹窗结算：请假桥接 / 中断计失败；已取代旧的补卡机制）
 - [x] 常规任务 force_warning 修复（从创建日起算，创建当天不触发警告）
 - [x] 常规任务 streak 重算（从 log 全量重算，保证补卡后一致性）
 - [x] 历史任务回溯（Tasks 页月历切换日期，历史只读）
@@ -447,3 +456,29 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - [ ] AI 趋势分析（Anthropic SDK）
 - [ ] 历史回顾页面
 - [ ] Electron 打包（功能稳定后）
+- [ ] AI 自主监管者（见下方设计）
+
+### AI 自主监管者（待实现）
+
+一个有自主性的 AI 角色，无需用户主动触发，监控 agent 数据和操作，随机"冒泡"给出反馈，像一个活生生的任务监工。
+
+#### 设计思路
+
+**触发时机**（后端关键 API 里以概率异步触发，不阻塞主流程）：
+- 完成任务时（约 20% 概率）
+- 记录赢麻了时
+- 常规任务打卡/连续达成里程碑时
+- 每日首次打开时
+
+**AI 上下文**：触发时把相关数据打包——今日任务完成情况、连续打卡天数、历史得分趋势、当前目标进度，让 AI 说出有依据的话。
+
+**角色人设**：固定 system prompt，设定为"严格但偶尔会夸你的监工"，每次冒泡风格一致，像一个真实角色。
+
+**消息流转**：
+1. 后端触发 AI 生成，结果存入 `backend/data/ai_messages.json`（队列结构，含 `id / content / trigger / created_at / read`）
+2. 前端每 30 秒轮询 `GET /ai/messages/pending`，有新消息就以角落气泡弹出
+3. 气泡展示 6-8 秒后自动消失，同时标记已读
+
+**实现文件**：
+- 后端：`routers/ai.py` 新增消息队列接口 + `storage/ai_messages.py`
+- 前端：`components/AiBubble.tsx`（气泡组件）+ `App.tsx` 里轮询逻辑

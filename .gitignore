@@ -6,8 +6,8 @@ __pycache__/
 .venv/
 venv/
 
-# 数据文件（本地数据不上传）
-backend/data/wins.json
+# 数据文件（本地数据不上传，config.json 含 API key 明文）
+backend/data/
 
 # 旧版 CLI 文件（已迁移至 backend/）
 main.py
@@ -22,6 +22,9 @@ frontend/screenshots/
 
 # 本地启动脚本
 启动.vbs
+
+# 运行日志
+logs/
 
 # 系统
 .DS_Store

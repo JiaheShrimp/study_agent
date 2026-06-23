@@ -13,6 +13,12 @@ export interface WinStats {
   by_level: { small: number; medium: number; big: number; future: number }
 }
 
+export interface Spinner {
+  id: string
+  name: string
+  items: string[]
+}
+
 const BASE = '/api'
 
 async function get<T>(path: string): Promise<T> {
@@ -80,14 +86,12 @@ export interface RoutineTask {
   stars: number
   target_days: number
   created_date: string
-  allow_makeup: boolean
   streak: number
   best_streak: number
   total_done: number
   last_done_date: string | null
   force_warning: boolean
   fail_days: number
-  makeup_available: boolean
   completed: boolean
 }
 
@@ -113,6 +117,19 @@ export interface RoutinesData {
   max_routines: number
   fail_days_limit: number
   routines: RoutineTask[]
+}
+
+// 漏打结算：某常规任务待结算的历史日期
+export interface PendingRoutineDay {
+  routine_id: string
+  content: string
+  days: string[]            // 升序排列的待结算日期
+}
+
+export interface RoutineSettleItem {
+  day: string
+  decision: 'excused' | 'missed'   // 请假 / 中断
+  reason?: string
 }
 
 export interface ScoreBreakdown {
@@ -269,13 +286,16 @@ export const api = {
     get: () => get<RoutinesData>('/tasks/routines'),
     updateSettings: (s: { fail_days_limit: number }) =>
       post<RoutineSettings>('/tasks/routines/settings', s, 'PUT'),
-    create: (r: { content: string; hours: number; stars: number; target_days: number; allow_makeup: boolean }) =>
+    create: (r: { content: string; hours: number; stars: number; target_days: number }) =>
       post<RoutineTask>('/tasks/routines', r),
     delete: (id: string) => del(`/tasks/routines/${id}`),
     toggleDone: (id: string, date?: string) =>
       post<RoutineTask>(`/tasks/routines/${id}/done${date ? `?date=${date}` : ''}`, {}, 'PATCH'),
     archived: () => get<ArchivedRoutine[]>('/tasks/routines/archived'),
     restart: (id: string) => post<RoutineTask>(`/tasks/routines/${id}/restart`, {}),
+    pendingSettlement: () => get<PendingRoutineDay[]>('/tasks/routines/pending-settlement'),
+    settle: (id: string, items: RoutineSettleItem[]) =>
+      post<RoutineTask>(`/tasks/routines/${id}/settle`, items),
   },
   wins: {
     list: () => get<Win[]>('/wins/'),
@@ -295,5 +315,12 @@ export const api = {
     status: () => get<AIStatus>('/ai/status'),
     setConfig: (cfg: { provider: string; api_key: string; model?: string; custom_base_url?: string }) =>
       post<{ ok: boolean; available: boolean }>('/ai/config', { model: '', custom_base_url: '', ...cfg }, 'PUT'),
+  },
+  spinner: {
+    list: () => get<Spinner[]>('/spinner'),
+    create: (name: string, items: string[]) => post<Spinner>('/spinner', { name, items }),
+    update: (id: string, name: string, items: string[]) => post<Spinner>(`/spinner/${id}`, { name, items }, 'PUT'),
+    delete: (id: string) => del(`/spinner/${id}`),
+    spin: (id: string) => post<{ result: string }>(`/spinner/${id}/spin`, {}),
   },
 }

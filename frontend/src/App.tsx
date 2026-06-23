@@ -7,7 +7,9 @@ import { Plan } from '@/pages/Placeholder'
 import { Tasks } from '@/pages/Tasks'
 import { TasksManage } from '@/pages/TasksManage'
 import { Settings } from '@/pages/Settings'
+import { SpinnerPage } from '@/pages/SpinnerPage'
 import { SlotMachine } from '@/components/SlotMachine'
+import { RoutineSettlement } from '@/components/RoutineSettlement'
 import { api, type DailyBonus } from '@/lib/api'
 
 export default function App() {
@@ -40,6 +42,7 @@ export default function App() {
           <Route path="tasks" element={<Tasks />} />
           <Route path="tasks/manage" element={<TasksManage />} />
           <Route path="plan" element={<Plan />} />
+          <Route path="spinner" element={<SpinnerPage />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
@@ -50,6 +53,9 @@ export default function App() {
           onSkip={() => setShowSlot(false)}
         />
       )}
+
+      {/* 老虎机关闭后再弹漏打结算，避免两个弹窗叠在一起 */}
+      {!showSlot && <RoutineSettlement />}
     </BrowserRouter>
   )
 }

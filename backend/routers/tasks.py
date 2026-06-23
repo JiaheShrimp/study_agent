@@ -620,14 +620,12 @@ class RoutineTask(BaseModel):
     stars: int
     target_days: int
     created_date: str
-    allow_makeup: bool
     streak: int
     best_streak: int
     total_done: int
     last_done_date: str | None
     force_warning: bool
     fail_days: int            # 当前连续未完成天数（派生字段）
-    makeup_available: bool    # 今天可补昨天（派生字段，不存储）
     completed: bool
 
 class ArchivedRoutine(BaseModel):
@@ -647,7 +645,6 @@ class RoutineCreate(BaseModel):
     hours: float
     stars: int
     target_days: int
-    allow_makeup: bool = False
 
 class RoutineSettings(BaseModel):
     max_routines: int          # 只读，由系统自动管理
@@ -655,43 +652,41 @@ class RoutineSettings(BaseModel):
 
 
 def _count_fail_days(routine: dict, max_days: int = 365) -> int:
-    """计算从昨天往前连续未完成的天数（今天未结束不计入；创建日之前不计入）。"""
+    """计算从昨天往前连续未完成的天数（今天未结束不计入；创建日之前不计入）。
+
+    规则：
+    - 完成日（log 为 True）→ 终止连续失败统计
+    - 请假日（excused 中有记录）→ 跳过，不计入失败、也不终止
+    - 尚未结算的日（log/excused 都没有）→ 也跳过，等用户在弹窗里结算后才计入
+      （避免「几天没开 app」被直接判失败）
+    - 明确中断日（log 为 False）→ 计入连续失败
+    """
     if routine.get("completed"):
         return 0
     today = Date.fromisoformat(_game_today())
     created = Date.fromisoformat(routine.get("created_date", str(today)))
     log = routine.get("log", {})
+    excused = routine.get("excused", {})
     consecutive_fails = 0
     for i in range(1, max_days + 1):
         day = today - timedelta(days=i)
         if day < created:
             break
-        if log.get(str(day)) is True:
+        ds = str(day)
+        if log.get(ds) is True:
             break
-        consecutive_fails += 1
+        if ds in excused:
+            continue          # 请假日：桥接，不计失败
+        if ds not in log:
+            continue          # 未结算：暂不计失败，等用户结算
+        consecutive_fails += 1  # log[ds] is False：明确中断，计入失败
     return consecutive_fails
-
-
-def _makeup_available(r: dict) -> bool:
-    """今天可以补昨天：allow_makeup=True，昨天未完成，今天已完成，且创建日期 <= 昨天。"""
-    if not r.get("allow_makeup") or r.get("completed"):
-        return False
-    today = Date.fromisoformat(_game_today())
-    yesterday = str(today - timedelta(days=1))
-    created = Date.fromisoformat(r.get("created_date", str(today)))
-    if Date.fromisoformat(yesterday) < created:
-        return False
-    log = r.get("log", {})
-    # 今天已完成、昨天未完成，才能补
-    return log.get(str(today)) is True and log.get(yesterday) is not True
 
 
 def _routine_to_model(r: dict, fail_days_limit: int) -> dict:
     fail_days = _count_fail_days(r)
     r["fail_days"] = fail_days
     r["force_warning"] = fail_days >= fail_days_limit
-    r.setdefault("allow_makeup", False)
-    r["makeup_available"] = _makeup_available(r)
     return r
 
 
@@ -763,7 +758,6 @@ def restart_routine(routine_id: str):
         "hours": target["hours"],
         "stars": target["stars"],
         "target_days": target["target_days"],
-        "allow_makeup": False,
         "created_date": _game_today(),
         "streak": 0,
         "best_streak": 0,
@@ -791,6 +785,86 @@ def update_routine_settings(body: RoutineSettingsUpdate):
     return RoutineSettings(max_routines=data["max_routines"], fail_days_limit=data["fail_days_limit"])
 
 
+# ── 漏打结算 ─────────────────────────────────────────────────
+# 用户可能连续几天没打开 app（放假等）。这些天既没打卡也没标请假，
+# 属于「未结算」状态。下次打开时逐个任务、逐天提示用户结算：
+#   - excused：正当请假，桥接 streak，不计入连续失败
+#   - missed ：确认中断，log[day]=False，计入连续失败
+
+class PendingRoutineDay(BaseModel):
+    routine_id: str
+    content: str
+    days: list[str]            # 待结算的日期（升序）
+
+class RoutineSettleItem(BaseModel):
+    day: str
+    decision: str              # "excused" | "missed"
+    reason: str = ""
+
+
+def _pending_days(r: dict) -> list[str]:
+    """返回该常规任务从创建日到昨天、既未打卡也未请假的待结算日期。"""
+    if r.get("completed"):
+        return []
+    today = Date.fromisoformat(_game_today())
+    created = Date.fromisoformat(r.get("created_date", str(today)))
+    log = r.get("log", {})
+    excused = r.get("excused", {})
+    pending: list[str] = []
+    d = created
+    while d < today:
+        ds = str(d)
+        if ds not in log and ds not in excused:
+            pending.append(ds)
+        d += timedelta(days=1)
+    return pending
+
+
+@router.get("/routines/pending-settlement", response_model=list[PendingRoutineDay])
+def get_pending_settlement():
+    """返回所有需要逐天结算的常规任务及其待结算日期（供下次打开时弹窗）。"""
+    data = load_routines()
+    result: list[PendingRoutineDay] = []
+    for r in data["routines"]:
+        days = _pending_days(r)
+        if days:
+            result.append(PendingRoutineDay(
+                routine_id=r["id"], content=r.get("content", ""), days=days,
+            ))
+    return result
+
+
+@router.post("/routines/{routine_id}/settle", response_model=RoutineTask)
+def settle_routine(routine_id: str, items: list[RoutineSettleItem]):
+    """对某常规任务的若干历史日期进行结算（请假 / 中断）。"""
+    data = load_routines()
+    fl = data["fail_days_limit"]
+    for r in data["routines"]:
+        if r["id"] != routine_id:
+            continue
+        log: dict = r.setdefault("log", {})
+        excused: dict = r.setdefault("excused", {})
+        for it in items:
+            if it.decision == "excused":
+                excused[it.day] = it.reason or ""
+                log.pop(it.day, None)          # 防止冲突
+            elif it.decision == "missed":
+                log[it.day] = False
+                excused.pop(it.day, None)
+        _recalc_streak(r)
+        # 结算后可能触发归档（连续中断超限）
+        if not r.get("completed") and _count_fail_days(r) >= fl:
+            save_routines(data)
+            _archive_routine(r, "failed", data)
+            save_routines(data)
+            r["fail_days"] = _count_fail_days(r)
+            r["force_warning"] = True
+            return r
+        save_routines(data)
+        return _routine_to_model(r, fl)
+    raise HTTPException(404, "常规任务不存在")
+
+
 @router.post("/routines", response_model=RoutineTask, status_code=201)
 def create_routine(body: RoutineCreate):
     data = load_routines()
@@ -804,7 +878,6 @@ def create_routine(body: RoutineCreate):
         "stars": body.stars,
         "target_days": body.target_days,
         "created_date": _game_today(),
-        "allow_makeup": body.allow_makeup,
         "streak": 0,
         "best_streak": 0,
         "total_done": 0,
@@ -826,19 +899,33 @@ def delete_routine(routine_id: str):
 
 
 def _recalc_streak(r: dict) -> None:
-    """从 log 从头重算 streak（保证补卡后数据一致）。"""
+    """从 log 从头重算 streak（保证补卡后数据一致）。
+
+    请假日（excused）视为桥接：两次打卡之间若全是请假日，则连续不断。
+    """
     log = r.get("log", {})
+    excused = r.get("excused", {})
     done_dates = sorted(d for d, v in log.items() if v is True)
     if not done_dates:
         r["streak"] = 0
         r["last_done_date"] = None
         return
+
+    def _bridged(prev: Date, cur: Date) -> bool:
+        """prev 与 cur 之间（不含两端）是否全是请假日。"""
+        d = prev + timedelta(days=1)
+        while d < cur:
+            if str(d) not in excused:
+                return False
+            d += timedelta(days=1)
+        return True
+
     streak = 1
     best = 1
     for i in range(1, len(done_dates)):
         prev = Date.fromisoformat(done_dates[i - 1])
         cur  = Date.fromisoformat(done_dates[i])
-        if (cur - prev).days == 1:
+        if (cur - prev).days == 1 or _bridged(prev, cur):
             streak += 1
         else:
             streak = 1
@@ -850,7 +937,7 @@ def _recalc_streak(r: dict) -> None:
 
 @router.patch("/routines/{routine_id}/done", response_model=RoutineTask)
 def mark_routine_done(routine_id: str, date: str | None = None):
-    """标记常规任务完成（切换）。date 默认今天，补卡时传昨天日期。"""
+    """标记常规任务完成（切换）。date 默认今天。"""
     import os as _os_r
     import math as _m_r
     target_date = date or _game_today()
@@ -877,13 +964,11 @@ def mark_routine_done(routine_id: str, date: str | None = None):
             # 返回归档前的最终状态给前端展示
             r["fail_days"] = 0
             r["force_warning"] = False
-            r.setdefault("allow_makeup", False)
-            r["makeup_available"] = False
             return r
 
         save_routines(data)
 
-        # 补卡（target_date != 今天）只更新 streak，不写 task_run
+        # 非今日日期（如结算流程）只更新 streak，不写 task_run
         today = _game_today()
         if target_date == today:
             # 今日打卡：同步写/删 task_runs，计入今日有效学习时间

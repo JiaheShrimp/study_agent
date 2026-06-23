@@ -71,20 +71,25 @@ def start_frontend() -> subprocess.Popen:
         stderr=_logfile("frontend.log"),
     )
 
-def _wait_backend(timeout: int = 30) -> bool:
+def _wait_url(url: str, timeout: int = 30) -> bool:
+    """轮询 url 直到返回响应或超时。用于等待前/后端真正就绪。"""
     import urllib.request
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            urllib.request.urlopen("http://localhost:8000/api/bonus/today", timeout=2)
+            urllib.request.urlopen(url, timeout=2)
             return True
         except Exception:
-            time.sleep(1)
+            time.sleep(0.5)
     return False
 
-def wait_and_open(seconds: int = 3) -> None:
-    time.sleep(seconds)          # 先等前端 vite 编译
-    _wait_backend(timeout=30)    # 再等后端就绪
+def wait_and_open() -> None:
+    # 等后端就绪
+    _wait_url("http://localhost:8000/api/bonus/today", timeout=30)
+    # 等前端 Vite 真正能响应（含首次依赖预构建），避免在预构建未完成时打开导致整页 reload
+    _wait_url(APP_URL, timeout=60)
+    # 预构建完成后再多给一拍，确保 optimizeDeps 写盘完毕，浏览器首次加载即拿到优化后的依赖
+    time.sleep(1.5)
     webbrowser.open(APP_URL)
 
 def _kill_port(port: int) -> None:

@@ -111,6 +111,35 @@ export function playTaskDone() {
   tone(784, t + 0.1,  0.18, 0.12, 'sine')  // G5
 }
 
+// 任务达到预计时间——提示性的柔和上行三音（不打扰，提醒可收尾）
+export function playGoalReached() {
+  const c = getCtx()
+  const t = c.currentTime
+  tone(587, t,        0.16, 0.1,  'sine')   // D5
+  tone(784, t + 0.14, 0.16, 0.11, 'sine')   // G5
+  tone(988, t + 0.28, 0.32, 0.12, 'sine')   // B5
+}
+
+// 转盘旋转中的 tick（随速度变化频率）
+export function playSpinTick(speed: number) {
+  const c = getCtx()
+  const t = c.currentTime
+  const freq = 200 + speed * 800  // 越快越高
+  tone(freq, t, 0.03, 0.07, 'square')
+}
+
+// 转盘停止结果揭晓
+export function playSpinResult() {
+  const c = getCtx()
+  const t = c.currentTime
+  // 欢快的三连音上行
+  tone(523, t,        0.15, 0.15, 'sine')   // C5
+  tone(659, t + 0.12, 0.15, 0.15, 'sine')   // E5
+  tone(784, t + 0.24, 0.3,  0.18, 'sine')   // G5
+  // 尾音铃声
+  tone(1047, t + 0.38, 0.4, 0.1, 'sine')    // C6
+}
+
 // 赏金任务弹出——神秘感强的低→高两音 + 铃声
 export function playBountyAppear() {
   const c = getCtx()

@@ -9,6 +9,7 @@ import { cn, gameToday } from '@/lib/utils'
 import { TaskRunner } from '@/components/TaskRunner'
 import { StudyGoalCard } from '@/components/StudyGoalCard'
 import { playBountyAppear, playClick, playTaskDone } from '@/lib/sounds'
+import { StarWall } from '@/components/StarWall'
 
 // ── 工具 ─────────────────────────────────────────────────────
 function daysInMonth(y: number, m: number) { return new Date(y, m + 1, 0).getDate() }
@@ -550,20 +551,19 @@ function AddRoutineModal({
   onClose,
 }: {
   maxReached: boolean
-  onAdd: (r: { content: string; hours: number; stars: number; target_days: number; allow_makeup: boolean }) => Promise<void>
+  onAdd: (r: { content: string; hours: number; stars: number; target_days: number }) => Promise<void>
   onClose: () => void
 }) {
   const [content, setContent]         = useState('')
   const [hours, setHours]             = useState(0.5)
   const [stars, setStars]             = useState(3)
   const [targetDays, setTargetDays]   = useState(21)
-  const [allowMakeup, setAllowMakeup] = useState(false)
   const [saving, setSaving]           = useState(false)
 
   async function submit() {
     if (!content.trim() || saving) return
     setSaving(true)
-    try { await onAdd({ content: content.trim(), hours, stars, target_days: targetDays, allow_makeup: allowMakeup }) }
+    try { await onAdd({ content: content.trim(), hours, stars, target_days: targetDays }) }
     finally { setSaving(false) }
   }
 
@@ -623,29 +623,6 @@ function AddRoutineModal({
               />
               <span className="text-xs text-muted-foreground">天</span>
             </div>
-            {/* 补卡开关 */}
-            <button
-              type="button"
-              onClick={() => !maxReached && setAllowMakeup(v => !v)}
-              disabled={maxReached}
-              className={cn(
-                'flex items-center gap-2 rounded-xl px-3 py-2 text-xs transition-colors border',
-                allowMakeup
-                  ? 'bg-violet-50 border-violet-200 text-violet-700'
-                  : 'bg-secondary/50 border-border text-muted-foreground hover:bg-secondary'
-              )}
-            >
-              <span className={cn(
-                'relative w-7 h-4 rounded-full transition-colors shrink-0',
-                allowMakeup ? 'bg-violet-500' : 'bg-border'
-              )}>
-                <span className={cn(
-                  'absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform',
-                  allowMakeup ? 'translate-x-3.5' : 'translate-x-0.5'
-                )} />
-              </span>
-              <span>允许补卡 — 昨天漏打可在今天补上，保持连续</span>
-            </button>
           </div>
 
           <div className="flex gap-2 pt-1">
@@ -739,7 +716,6 @@ function RoutineCard({
   today,
   failDaysLimit,
   onToggle,
-  onMakeup,
   onDelete,
   onStart,
 }: {
@@ -747,7 +723,6 @@ function RoutineCard({
   today: string
   failDaysLimit: number
   onToggle: () => void
-  onMakeup: () => void
   onDelete: () => void
   onStart: () => void
 }) {
@@ -869,17 +844,6 @@ function RoutineCard({
         </div>
       </div>
 
-      {/* 补卡提示 */}
-      {routine.makeup_available && (
-        <button
-          onClick={onMakeup}
-          className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700 font-medium hover:bg-violet-100 transition-colors"
-        >
-          <RotateCcw className="h-3 w-3" />
-          补昨天的打卡（今天已完成，再补一次保持连续）
-        </button>
-      )}
-
       {/* 强制警告 */}
       {routine.force_warning && !routine.completed && (
         <div className="rounded-xl bg-rose-100 border border-rose-200 px-3 py-2 text-xs text-rose-700 flex items-start gap-1.5">
@@ -992,34 +956,6 @@ function WorkRestModal({
             </button>
           </div>
         </div>
-      </div>
-    </div>
-  )
-}
-
-// ── 星星墙 ────────────────────────────────────────────────────
-function StarWall({ count }: { count: number }) {
-  if (count <= 0) return null
-  const rows: number[] = []
-  let remaining = count
-  while (remaining > 0) {
-    rows.push(Math.min(remaining, 10))
-    remaining -= 10
-  }
-  return (
-    <div className="bg-card rounded-2xl border border-border px-5 py-4 space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-medium text-muted-foreground">今日获得</p>
-        <p className="text-xs font-semibold text-amber-600">{count} ★</p>
-      </div>
-      <div className="space-y-1">
-        {rows.map((n, ri) => (
-          <div key={ri} className="flex gap-0.5 flex-wrap">
-            {Array.from({ length: n }).map((_, i) => (
-              <span key={i} className="text-amber-400 text-base leading-none select-none">★</span>
-            ))}
-          </div>
-        ))}
       </div>
     </div>
   )
@@ -1306,16 +1242,6 @@ export function Tasks() {
                         }))
                       }
                     }}
-                    onMakeup={async () => {
-                      const yesterday = fmtDate(new Date(Date.now() - 86400000))
-                      const updated = await api.routines.toggleDone(r.id, yesterday).catch(() => null)
-                      if (updated) {
-                        setRoutinesData(d => ({
-                          ...d,
-                          routines: d.routines.map(x => x.id === r.id ? updated : x),
-                        }))
-                      }
-                    }}
                     onDelete={async () => {
                       await api.routines.delete(r.id).catch(() => {})
                       setRoutinesData(d => ({ ...d, routines: d.routines.filter(x => x.id !== r.id) }))
@@ -1426,7 +1352,7 @@ export function Tasks() {
         <AddRoutineModal
           maxReached={routinesData.routines.filter(r => !r.completed).length >= routinesData.max_routines}
           onAdd={async (r) => {
-            const created = await api.routines.create({ ...r, allow_makeup: r.allow_makeup })
+            const created = await api.routines.create(r)
             setRoutinesData(d => ({ ...d, routines: [...d.routines, created] }))
             setAddRoutineModal(false)
           }}

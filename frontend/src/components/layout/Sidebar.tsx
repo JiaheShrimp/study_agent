@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Trophy, CheckSquare, BookOpen, Settings } from 'lucide-react'
+import { LayoutDashboard, Trophy, CheckSquare, Disc3, Settings } from 'lucide-react'
+// BookOpen 供「学习计划」入口使用，功能暂不推进，恢复时一并取消注释
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 
@@ -8,7 +9,9 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: '首页' },
   { to: '/wins', icon: Trophy, label: '赢麻了' },
   { to: '/tasks', icon: CheckSquare, label: '每日任务' },
-  { to: '/plan', icon: BookOpen, label: '学习计划' },
+  { to: '/spinner', icon: Disc3, label: '随机转盘' },
+  // 学习计划功能暂不推进，先注释入口（恢复时把 BookOpen import 一并恢复）
+  // { to: '/plan', icon: BookOpen, label: '学习计划' },
 ]
 
 export function Sidebar() {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { api, type DailyTask, type ScoreBreakdown } from '@/lib/api'
 import { cn, gameToday } from '@/lib/utils'
+import { playGoalReached } from '@/lib/sounds'
 
 // ── 工具 ─────────────────────────────────────────────────────
 function fmt(s: number) {
@@ -10,10 +11,9 @@ function fmt(s: number) {
 }
 
 // ── 倒计时弹窗 ────────────────────────────────────────────────
-function Countdown({ onDone, task, restBudgetSecs, workMins, restMins, isResume }: {
+function Countdown({ onDone, task, workMins, restMins, isResume }: {
   onDone: () => void
   task: { content: string; hours: number }
-  restBudgetSecs: number
   workMins: number
   restMins: number
   isResume?: boolean
@@ -29,6 +29,8 @@ function Countdown({ onDone, task, restBudgetSecs, workMins, restMins, isResume 
   const totalSecs = Math.round(task.hours * 3600)
   const workH = Math.floor(totalSecs / 3600)
   const workM = Math.floor((totalSecs % 3600) / 60)
+  // 总休息预算（与主组件口径一致）：按预计时长换算
+  const totalRestMin = Math.round(Math.max(restMins, (totalSecs / (workMins * 60)) * restMins))
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 backdrop-blur-sm">
@@ -41,12 +43,12 @@ function Countdown({ onDone, task, restBudgetSecs, workMins, restMins, isResume 
         <div className="bg-white/10 backdrop-blur rounded-2xl px-6 py-4 space-y-1 text-white">
           <p className="text-sm font-semibold">{task.content}</p>
           <div className="flex items-center justify-center gap-4 text-xs text-white/70 mt-1">
-            <span>⏱ 任务时长 {workH > 0 ? `${workH}h ` : ''}{workM > 0 ? `${workM}m` : `${totalSecs}s`}</span>
+            <span>⏱ 任务时长 {workH > 0 ? `${workH}h` : ''}{workM > 0 ? ` ${workM}m` : ''}</span>
             <span>💤 每 {workMins}m 休息 {restMins}m</span>
           </div>
           {isResume
             ? <p className="text-[11px] text-white/50 mt-1">从上次进度继续，已有休息预算保留</p>
-            : <p className="text-[11px] text-white/50 mt-1">初始休息预算 {restMins}m，每完成一段工作追加</p>
+            : <p className="text-[11px] text-white/50 mt-1">总休息预算 {totalRestMin}m，暂停时消耗</p>
           }
         </div>
 
@@ -69,6 +71,7 @@ function Track({
   totalRestBudget,
   paused,
   isResting,
+  overtime,
   frame,
 }: {
   runnerPct: number
@@ -76,13 +79,14 @@ function Track({
   totalRestBudget: number
   paused: boolean
   isResting: boolean
+  overtime: boolean
   frame: number
 }) {
-  const SIZE = 280        // SVG 尺寸
+  const SIZE = 380        // SVG 尺寸
   const CX = SIZE / 2     // 圆心
   const CY = SIZE / 2
-  const R = 108           // 跑道半径
-  const STROKE = 14       // 跑道宽度
+  const R = 150           // 跑道半径
+  const STROKE = 18       // 跑道宽度
 
   const lowRest = restSecsLeft < 60
 
@@ -124,12 +128,12 @@ function Track({
             strokeWidth={STROKE}
           />
 
-          {/* 完成进度弧（小人走过的路） */}
+          {/* 完成进度弧（小人走过的路）；超时变琥珀色 */}
           {runnerPct > 0.5 && (
             <path
               d={arcPath(0, Math.min(runnerPct, 99.9))}
               fill="none"
-              stroke={lowRest && paused ? '#fca5a5' : 'hsl(var(--primary))'}
+              stroke={overtime ? '#f59e0b' : lowRest && paused ? '#fca5a5' : 'hsl(var(--primary))'}
               strokeWidth={STROKE}
               strokeLinecap="round"
               style={{ transition: 'stroke 0.5s' }}
@@ -140,42 +144,42 @@ function Track({
           {Array.from({ length: 10 }).map((_, i) => {
             const pos = pctToXY(i * 10)
             return (
-              <circle key={i} cx={pos.x} cy={pos.y} r={2}
+              <circle key={i} cx={pos.x} cy={pos.y} r={2.5}
                 fill="hsl(var(--background))" opacity={0.6} />
             )
           })}
 
           {/* 终点旗标记（100% = 顶部） */}
           <text
-            x={CX} y={CY - R - STROKE / 2 - 4}
-            textAnchor="middle" fontSize={16} dominantBaseline="auto"
+            x={CX} y={CY - R - STROKE / 2 - 6}
+            textAnchor="middle" fontSize={22} dominantBaseline="auto"
           >🏁</text>
 
           {/* 小人 */}
           <text
             x={runnerPos.x} y={runnerPos.y}
             textAnchor="middle" dominantBaseline="middle"
-            fontSize={20}
+            fontSize={28}
             style={{ transition: paused ? 'none' : 'all 0.4s linear' }}
           >
             {runnerEmoji}
           </text>
 
           {/* 中央信息 */}
-          <text x={CX} y={CY - 22} textAnchor="middle" fontSize={11}
-            fill="hsl(var(--muted-foreground))">
-            {paused ? '⚠ 暂停' : isResting ? '😴 休息' : '💨 冲刺'}
+          <text x={CX} y={CY - 30} textAnchor="middle" fontSize={14}
+            fill={overtime && !paused ? '#f59e0b' : 'hsl(var(--muted-foreground))'}>
+            {paused ? '⚠ 暂停' : isResting ? '😴 休息' : overtime ? '⏰ 超时冲刺' : '💨 冲刺'}
           </text>
 
           {/* 休息剩余时间 */}
-          <text x={CX} y={CY + 4} textAnchor="middle" fontSize={22}
+          <text x={CX} y={CY + 6} textAnchor="middle" fontSize={32}
             fontWeight="bold" fontFamily="monospace"
             fill={restSecsLeft < 60 ? '#ef4444' : restSecsLeft < 120 ? '#f59e0b' : 'hsl(var(--foreground))'}>
             {restM}:{restS.toString().padStart(2, '0')}
           </text>
 
           {/* 休息预算标签 */}
-          <text x={CX} y={CY + 24} textAnchor="middle" fontSize={10}
+          <text x={CX} y={CY + 32} textAnchor="middle" fontSize={12}
             fill="hsl(var(--muted-foreground))">
             休息预算
           </text>
@@ -186,17 +190,17 @@ function Track({
               d={arcPath(0, restPct * 100, R + STROKE)}
               fill="none"
               stroke={restSecsLeft < 60 ? '#ef4444' : restSecsLeft < 120 ? '#f59e0b' : '#4ade80'}
-              strokeWidth={4}
+              strokeWidth={5}
               strokeLinecap="round"
               opacity={0.7}
             />
           )}
           <circle cx={CX} cy={CY} r={R + STROKE}
-            fill="none" stroke="hsl(var(--border))" strokeWidth={4} opacity={0.3} />
+            fill="none" stroke="hsl(var(--border))" strokeWidth={5} opacity={0.3} />
         </svg>
 
         {/* 暂停危险光晕 */}
-        {paused && danger && (
+        {paused && (
           <div className="absolute inset-0 rounded-full bg-rose-500/5 animate-pulse pointer-events-none" />
         )}
       </div>
@@ -322,12 +326,13 @@ interface RunState {
   workSecsLeft: number    // 当前工作段剩余秒
   restSecsLeft: number    // 当前休息/暂停预算剩余秒
   totalRestBudget: number // 总休息预算（随工作时间增加）
-  workedSecs: number      // 累计工作秒数
+  workedSecs: number      // 累计工作秒数（正计时，从 0 开始）
   pausedSecs: number      // 累计暂停秒数
   pauseCount: number
   paused: boolean
   isResting: boolean      // 是否在自动休息段
   runnerPct: number       // 0-100
+  overtime: boolean       // 是否已超过预计时间（达到 totalSecs 后仍在计时）
   success: boolean
   ended: boolean
 }
@@ -353,12 +358,14 @@ export function TaskRunner({
   const totalSecs = Math.round(task.hours * 3600)
   const startedAtRef = useRef<string>('')   // 记录实际开始时间
 
+  // 总休息预算 = 按预计时长换算（每 work_mins 工作配 rest_mins 休息），开局一次性给满
+  // 例：1h 任务、每 30min 休息 5min → 3600/1800 × 300 = 600s = 10 分钟
+  const TOTAL_REST_BUDGET = Math.max(REST_SECS, Math.round((totalSecs / WORK_SECS) * REST_SECS))
+
   // 从上次暂停进度继续时的初始状态
   const initProgress = Math.min(initialWorkedSecs, totalSecs - 1)
   const initRunnerPct = initProgress > 0 ? 2 + (initProgress / totalSecs) * 90 : 2
-  const initRestBudget = initProgress > 0
-    ? REST_SECS * Math.ceil(initProgress / WORK_SECS + 1)
-    : REST_SECS
+  const initRestBudget = TOTAL_REST_BUDGET
 
   const [phase, setPhase] = useState<Phase>('countdown')
   const [endReason, setEndReason] = useState<EndReason>('complete')
@@ -374,9 +381,13 @@ export function TaskRunner({
     paused: false,
     isResting: false,
     runnerPct: initRunnerPct,
+    overtime: initProgress >= totalSecs,
     success: false,
     ended: false,
   })
+  // 到点提示横幅是否显示；reachedRef 防止到点音效/横幅重复触发
+  const [showReachedBanner, setShowReachedBanner] = useState(false)
+  const reachedRef = useRef<boolean>(initProgress >= totalSecs)
   const [display, setDisplay] = useState({ ...stateRef.current })
   const rafRef = useRef<number>(0)
   const lastTickRef = useRef<number>(0)
@@ -390,7 +401,7 @@ export function TaskRunner({
       success: reason === 'complete' || reason === 'early',
       started_at: startedAtRef.current,
       ended_at: new Date().toISOString(),
-      actual_seconds: Math.round(s.workedSecs),
+      actual_seconds: Math.round(s.workedSecs - initProgress),
       pause_count: s.pauseCount,
       pause_seconds: Math.round(s.pausedSecs),
       task_hours: task.hours,
@@ -432,25 +443,22 @@ export function TaskRunner({
       // 休息段不消耗预算，让玩家缓口气
       s.restSecsLeft = Math.min(s.totalRestBudget, s.restSecsLeft + delta * 0.5)
     } else {
-      // 工作中：小人前进
+      // 工作中：小人前进（正计时，从 0 累加，到预计时间后不停止）
       s.workedSecs += delta
       s.workSecsLeft -= delta
 
-      // 进度：已工作时间 / 总任务时间
+      // 进度：已工作时间 / 总任务时间，封顶 100%（超时后小人停在终点）
       const progress = Math.min(s.workedSecs / totalSecs, 1)
       s.runnerPct = 2 + progress * 90  // 2% ~ 92%
 
-      // 累计工作时间增加休息预算
-      s.totalRestBudget = restSecsConst * Math.ceil(s.workedSecs / workSecsConst + 1)
-
-      // 到达终点
-      if (s.workedSecs >= totalSecs) {
-        s.ended = true
-        s.success = true
-        s.runnerPct = 96
-        setDisplay({ ...s })
-        finishRun(s, 'complete')
-        return
+      // 到达预计时间：不结束，弹到点提示 + 音效（仅一次），继续计时进入超时态
+      if (s.workedSecs >= totalSecs && !reachedRef.current) {
+        reachedRef.current = true
+        s.overtime = true
+        s.runnerPct = 92
+        try { playGoalReached() } catch {}
+        setShowReachedBanner(true)
+        setTimeout(() => setShowReachedBanner(false), 4000)
       }
 
       // 工作段结束后进入休息段
@@ -509,20 +517,21 @@ export function TaskRunner({
     finishRun(s, 'giveup')
   }
 
-  function handleEarlyFinish() {
+  function handleFinish() {
     const s = stateRef.current
     s.ended = true
     s.success = true
     s.runnerPct = 96
     cancelAnimationFrame(rafRef.current)
     setDisplay({ ...s })
-    finishRun(s, 'early')
+    // 未到预计时间 = 提前完成（early，享受提前加成）；到点或超时 = 正常完成
+    finishRun(s, s.workedSecs >= totalSecs ? 'complete' : 'early')
   }
 
   const workedPct = Math.min(100, (display.workedSecs / totalSecs) * 100)
 
   if (phase === 'countdown') {
-    return <Countdown onDone={() => setPhase('running')} task={task} restBudgetSecs={REST_SECS} workMins={workMins} restMins={restMins} isResume={initialWorkedSecs > 0} />
+    return <Countdown onDone={() => setPhase('running')} task={task} workMins={workMins} restMins={restMins} isResume={initialWorkedSecs > 0} />
   }
 
   if (phase === 'result') {
@@ -541,8 +550,19 @@ export function TaskRunner({
     )
   }
 
+  const overtimeSecs = Math.max(0, Math.round(display.workedSecs - totalSecs))
+
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-background">
+      {/* 到点提示横幅 */}
+      {showReachedBanner && (
+        <div className="absolute top-0 inset-x-0 z-50 flex justify-center px-4 pt-3 pointer-events-none">
+          <div className="animate-in slide-in-from-top-4 fade-in duration-300 rounded-2xl bg-amber-500 text-white px-5 py-2.5 shadow-lg text-sm font-medium flex items-center gap-2">
+            ⏰ 已达预计时间，可随时点「完成任务」收尾
+          </div>
+        </div>
+      )}
+
       {/* 顶部信息 */}
       <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-border">
         <div>
@@ -551,19 +571,32 @@ export function TaskRunner({
         </div>
         <div className="text-right">
           <p className="text-xs text-muted-foreground">已完成</p>
-          <p className="text-xl font-black tabular-nums text-primary">{workedPct.toFixed(0)}%</p>
+          <p className={cn(
+            'text-xl font-black tabular-nums',
+            display.overtime ? 'text-amber-500' : 'text-primary'
+          )}>{workedPct.toFixed(0)}%</p>
         </div>
       </div>
 
       {/* 主内容区 */}
       <div className="flex-1 flex flex-col items-center justify-center px-6 gap-5">
 
-        {/* 时间显示 */}
+        {/* 时间显示：正计时（已用时间）；超时后变橙色并显示超出时长 */}
         <div className="text-center space-y-1">
-          <p className="text-5xl font-black tabular-nums tracking-tight">
-            {fmt(Math.round(totalSecs - display.workedSecs))}
+          <p className={cn(
+            'text-5xl font-black tabular-nums tracking-tight transition-colors',
+            display.overtime && 'text-amber-500'
+          )}>
+            {fmt(Math.round(display.workedSecs))}
           </p>
-          <p className="text-xs text-muted-foreground">剩余时间</p>
+          <p className={cn(
+            'text-xs',
+            display.overtime ? 'text-amber-500 font-medium' : 'text-muted-foreground'
+          )}>
+            {display.overtime
+              ? `已用时间 · 超出预计 ${fmt(overtimeSecs)}`
+              : `已用时间 · 预计 ${fmt(totalSecs)}`}
+          </p>
         </div>
 
         {/* 圆形跑道 */}
@@ -573,6 +606,7 @@ export function TaskRunner({
           totalRestBudget={display.totalRestBudget}
           paused={display.paused}
           isResting={display.isResting}
+          overtime={display.overtime}
           frame={frame}
         />
 
@@ -608,10 +642,15 @@ export function TaskRunner({
         </button>
         <div className="flex gap-3">
           <button
-            onClick={handleEarlyFinish}
-            className="flex-1 h-10 rounded-2xl text-sm font-medium text-sky-600 border border-sky-200 bg-sky-50 hover:bg-sky-100 transition-colors"
+            onClick={handleFinish}
+            className={cn(
+              'flex-1 h-10 rounded-2xl text-sm font-medium border transition-colors',
+              display.overtime
+                ? 'text-emerald-700 border-emerald-200 bg-emerald-50 hover:bg-emerald-100'
+                : 'text-sky-600 border-sky-200 bg-sky-50 hover:bg-sky-100'
+            )}
           >
-            ⚡ 提前完成
+            {display.overtime ? '✅ 完成任务' : '⚡ 提前完成'}
           </button>
           <button
             onClick={handleGiveUp}
