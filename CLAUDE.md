@@ -447,6 +447,7 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - [x] 音效系统（Web Audio API 合成，老虎机/赢麻了/赏金弹出/按钮点击）
 - [x] 时间轴显示暂停次数（`暂停 Xs · N次`）
 - [x] 任务列表失败/中断显示完成百分比（`X% · 失败 · 可重试`）
+- [x] AI 自主监管者基础设施（supervisor 统一入口 + 消息队列 + 右下角气泡轮询，目前仅接入赢麻了）
 
 **待开发**：
 - [ ] Buff 效果实际结算接入（task_score / daily_score / goal_shield / routine_double / lucky_dice）
@@ -456,29 +457,78 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - [ ] AI 趋势分析（Anthropic SDK）
 - [ ] 历史回顾页面
 - [ ] Electron 打包（功能稳定后）
-- [ ] AI 自主监管者（见下方设计）
 
-### AI 自主监管者（待实现）
+### AI 自主成长伙伴「搭子」（全局聊天栏 + 对话记忆，目前仅接入赢麻了）
 
-一个有自主性的 AI 角色，无需用户主动触发，监控 agent 数据和操作，随机"冒泡"给出反馈，像一个活生生的任务监工。
+一个像**朋友/搭子**一样的 AI 角色（**不是监工、不说教、不喊口号**），以**全局唯一的聊天栏**呈现。两种来往：
+- **业务操作触发**：你在赢麻了等页面操作，搭子异步生成主动反馈，出现在聊天栏。
+- **主动聊天**：你在聊天栏打字，搭子带历史回复。
 
-#### 设计思路
+**核心：对话记忆**。两条路径共用同一条「对话历史」（`storage/ai_dialogue`，跨天保留），它既是聊天栏内容，也是搭子的记忆——每次生成都把最近对话（**含搭子自己说过的话**）拼进 prompt，所以它有连续感、且不会重复（看得见自己说过啥）。这和「桌面宠物每次单轮失忆」是本质区别。
 
-**触发时机**（后端关键 API 里以概率异步触发，不阻塞主流程）：
-- 完成任务时（约 20% 概率）
-- 记录赢麻了时
-- 常规任务打卡/连续达成里程碑时
-- 每日首次打开时
+#### 一次生成发给 AI 的 messages（`_history_messages`）
 
-**AI 上下文**：触发时把相关数据打包——今日任务完成情况、连续打卡天数、历史得分趋势、当前目标进度，让 AI 说出有依据的话。
+时间升序：
+1. `user`：全部业务数据快照（`supervisor_context.build_summary()`，本地读零成本）+ `assistant` 一句确认（"我都看着呢"）
+2. 最近 16 条真实对话（user/assistant 交替，搭子的历史回复也在内）
+3. `user`：本次新输入 / 场景描述（`extra_user`）
 
-**角色人设**：固定 system prompt，设定为"严格但偶尔会夸你的监工"，每次冒泡风格一致，像一个真实角色。
+#### 业务数据聚合（`supervisor_context.build_summary()`）
 
-**消息流转**：
-1. 后端触发 AI 生成，结果存入 `backend/data/ai_messages.json`（队列结构，含 `id / content / trigger / created_at / read`）
-2. 前端每 30 秒轮询 `GET /ai/messages/pending`，有新消息就以角落气泡弹出
-3. 气泡展示 6-8 秒后自动消失，同时标记已读
+- 赢麻了：**最近 RECENT_KEEP=10 条固定 + 其余随机抽样**凑到 SAMPLE_BUDGET=40 条（每次抽样不同 → 逼 AI 均匀覆盖历史、减少老薅那几条的重复）；≤40 条时全给
+- 专注：累计小时 + 每日趋势；常规习惯：当前/历史最长 streak + 累计打卡 + 今日状态
 
-**实现文件**：
-- 后端：`routers/ai.py` 新增消息队列接口 + `storage/ai_messages.py`
-- 前端：`components/AiBubble.tsx`（气泡组件）+ `App.tsx` 里轮询逻辑
+#### 防重复 = 读自己回复 + 随机抽样
+
+- **读自己回复**：对话历史里有搭子说过的话，它不会再说一遍（"已经夸过论文框架了，换个说"）
+- **随机抽样**：每次喂的"老记录"不同，覆盖更均匀
+
+#### 统一入口 & 接入新触发点
+
+`supervisor_react(trigger, context, *, force=False)` 是搭子的唯一业务入口：按 `TRIGGER_PROBABILITY` 概率命中 → 后台 daemon 线程异步生成 → 写入对话历史（不阻塞主请求，出错静默不影响主流程）。接入新触发点：
+
+1. 在 `TRIGGER_PROBABILITY` 注册触发 id 和概率
+2. 写一个**场景构造器** `_build_xxx_scene(context)`（只描述「这次发生了什么」，业务数据/历史由 `_history_messages` 统一注入，**不要自己拼数据**），登记到 `_PROMPT_BUILDERS`
+3. 在 `FALLBACK_LINES` 加兜底文案（伙伴口吻，AI 超时/未配置时用）
+4. 在对应 router 的业务函数里：先 `ai_dialogue.append_turn("user", "（操作描述）", trigger=...)` 写操作流水，再调 `supervisor_react("xxx", {...context})`
+
+#### 角色人设
+
+`SUPERVISOR_SYSTEM`：一个真正了解你这个人的**朋友/搭子**，真诚俏皮、为你高兴、偶尔损你；**明令禁止『加油』『好好学习』『快去写作业』这类说教/命令话**。每条限一句、≤40 字。`_generate` 用 `max_tokens=800`，AI 超时**自动重试一次**降低撞兜底概率。
+
+> **max_tokens 为何是 800（重要）**：部分模型是「推理模型」（如 `deepseek-v4-pro`、o1 系列），返回里 `content`（正式回复）之外还有 `reasoning_content`（内部思考），两者共享 `max_tokens`。若上限太小（曾用 200），token 全被思考吃光、`content` 返回空字符串且 `finish_reason=length`，调用方误判失败 → 触发重试 → 白等一倍时间还常落到兜底。给足 800 后推理模型能正常出回复；普通模型用不满，无额外成本。注：耗时主要在模型本身（推理模型先思考，单次约 6~9 秒），数据聚合+prompt 构建仅约 12ms，不是瓶颈。
+
+#### 接口
+
+| 方法 | 路径 | 作用 |
+|------|------|------|
+| GET | `/ai/dialogue?limit=N` | 聊天栏拉取对话历史 |
+| POST | `/ai/chat` | 用户发消息：存 → 带历史生成回复 → 存 → 返回 |
+
+业务触发的反馈无独立接口，直接写入对话历史，前端聊天栏轮询 `/ai/dialogue` 捕获。
+
+#### 前端（聊天栏）
+
+- `components/ChatSidebar.tsx`：全局唯一，挂在 `AppLayout` **左侧常驻**（导航栏之后、主内容之前；手机端为可收起浮层）。做成独立浮卡（四周 `p-3` 留白 + 圆角边框，与导航栏视觉分隔）。消息列表（user 右/assistant 左气泡）+ 输入框（Enter 发送、Shift+Enter 换行）+ 乐观插入用户消息。
+- 布局高度锁定一屏（`AppLayout` 用 `h-screen` + `overflow-hidden`），聊天栏内部消息区滚动，不被长页面撑长。
+- 每 **5s** 轮询 `/ai/dialogue`；另监听 `agent:dialogue-refresh` 全局事件（记赢麻了等操作派发），命中后在 1.5/3.5/6s 连刷几次，覆盖后台生成的几秒，无需干等下一轮。
+- 检测到新 assistant 消息（对比最后 id）播 `playChatMessage()` 提示音（首次加载不播）。
+- **「正在思考」动画**：发消息 / 收到 `agent:dialogue-refresh` 时显示三点跳动气泡（CSS `animate-typing-dot`，在 `index.css`），新反馈到达时收尾；30s 超时兜底自动关，防止反馈不来时一直转。
+
+#### 触发点
+
+| trigger | 概率 | 位置 / 说明 |
+|---------|------|------|
+| `win_created` | **1.0（必触发）** | `routers/wins.py` 记录赢麻了后。操作信息只作为 `context` 传给 AI 当背景，**不写进对话历史、不在聊天框显示成 user 气泡**（聊天框只出现搭子反馈） |
+| `chat` | —（用户主动） | `POST /ai/chat` |
+
+#### 待接入触发点（后续逐步实现）
+
+- 任务完成 / 提前完成 / 力竭、常规打卡里程碑（`routers/tasks.py`）
+- 每日首次打开
+- 聊天栏里直接操作 agent（需 agent loop + 工具调用，暂未做）
+
+#### 实现文件
+
+- 后端：`routers/ai.py`（搭子核心 + dialogue/chat 接口）+ `storage/ai_dialogue.py`（对话历史/记忆）+ `supervisor_context.py`（业务数据聚合 + 随机抽样）+ `ai_client.chat_messages()`（多轮）+ `storage/tasks.py` 的 `load_task_runs()`
+- 前端：`components/ChatSidebar.tsx`（聊天栏 + 思考动画）+ `AppLayout` 左侧挂载 + `api.ts` 的 `ai.dialogue / ai.chat` + `sounds.ts` 的 `playChatMessage()` + `index.css` 的 `animate-typing-dot` + `pages/Wins.tsx` 记录后派发 `agent:dialogue-refresh`

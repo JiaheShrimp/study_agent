@@ -204,6 +204,15 @@ export interface AIStatus {
   providers: AIProviderMeta[]
 }
 
+// 搭子对话历史的一条
+export interface DialogueTurn {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  trigger: string
+  at: string
+}
+
 export const api = {
   tasks: {
     // 模板
@@ -315,6 +324,9 @@ export const api = {
     status: () => get<AIStatus>('/ai/status'),
     setConfig: (cfg: { provider: string; api_key: string; model?: string; custom_base_url?: string }) =>
       post<{ ok: boolean; available: boolean }>('/ai/config', { model: '', custom_base_url: '', ...cfg }, 'PUT'),
+    // 搭子对话：聊天栏轮询拉取历史 + 用户主动发消息
+    dialogue: (limit = 50) => get<DialogueTurn[]>(`/ai/dialogue?limit=${limit}`),
+    chat: (message: string) => post<{ reply: DialogueTurn }>('/ai/chat', { message }),
   },
   spinner: {
     list: () => get<Spinner[]>('/spinner'),

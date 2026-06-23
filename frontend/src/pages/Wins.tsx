@@ -230,6 +230,8 @@ function QuickAdd({ onAdded }: { onAdded: () => void }) {
     try {
       await api.wins.create(trimmed, level)
       playWinRecord(level)
+      // 通知搭子聊天栏：记了一条赢，尽快刷新拉取搭子反馈
+      window.dispatchEvent(new CustomEvent('agent:dialogue-refresh'))
       setContent('')
       setFlash(LEVEL_MAP[level].label)
       setTimeout(() => setFlash(null), 1500)

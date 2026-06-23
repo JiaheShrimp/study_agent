@@ -131,7 +131,7 @@ def _http_post(url: str, headers: dict, body: dict, timeout: int = 30) -> dict:
         raise RuntimeError(f"HTTP {e.code}: {err_body}") from e
 
 
-def _call_anthropic(key: str, base_url: str, model: str, system: str, prompt: str, max_tokens: int) -> str:
+def _call_anthropic(key: str, base_url: str, model: str, system: str, messages: list[dict], max_tokens: int) -> str:
     url = f"{base_url.rstrip('/')}/v1/messages"
     headers = {
         "Content-Type": "application/json",
@@ -141,7 +141,7 @@ def _call_anthropic(key: str, base_url: str, model: str, system: str, prompt: st
     body: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
     }
     if system:
         body["system"] = system
@@ -149,31 +149,32 @@ def _call_anthropic(key: str, base_url: str, model: str, system: str, prompt: st
     return resp["content"][0]["text"]
 
 
-def _call_openai_compat(key: str, base_url: str, model: str, system: str, prompt: str, max_tokens: int) -> str:
+def _call_openai_compat(key: str, base_url: str, model: str, system: str, messages: list[dict], max_tokens: int) -> str:
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {key}",
     }
-    messages = []
+    msgs = []
     if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+        msgs.append({"role": "system", "content": system})
+    msgs.extend(messages)
     body: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
-        "messages": messages,
+        "messages": msgs,
     }
     resp = _http_post(url, headers, body)
     return resp["choices"][0]["message"]["content"]
 
 
-def chat(prompt: str, system: str = "", max_tokens: int = 1024) -> str | None:
+def chat_messages(messages: list[dict], system: str = "", max_tokens: int = 1024) -> str | None:
     """
-    用当前配置的 provider 发一条消息，返回文本。
+    用当前配置的 provider 发一段多轮对话，返回文本。
+    messages: [{"role": "user"|"assistant", "content": "..."}]，时间升序。
     不可用或出错时返回 None（调用方降级）。
     """
-    if not is_available():
+    if not is_available() or not messages:
         return None
     c = _cfg()
     info = PROVIDERS[c["provider"]]
@@ -181,11 +182,19 @@ def chat(prompt: str, system: str = "", max_tokens: int = 1024) -> str | None:
     base_url = c["custom_base_url"] if c["provider"] == "openai_compat" else info["base_url"]
     try:
         if info["protocol"] == "anthropic":
-            return _call_anthropic(c["key"], base_url, model, system, prompt, max_tokens)
+            return _call_anthropic(c["key"], base_url, model, system, messages, max_tokens)
         else:
-            return _call_openai_compat(c["key"], base_url, model, system, prompt, max_tokens)
+            return _call_openai_compat(c["key"], base_url, model, system, messages, max_tokens)
     except Exception:
         return None
+
+
+def chat(prompt: str, system: str = "", max_tokens: int = 1024) -> str | None:
+    """
+    单轮：发一条 user 消息，返回文本。是 chat_messages 的便捷包装。
+    不可用或出错时返回 None（调用方降级）。
+    """
+    return chat_messages([{"role": "user", "content": prompt}], system=system, max_tokens=max_tokens)
 
 
 def chat_json(prompt: str, system: str = "", max_tokens: int = 1024) -> Any | None:

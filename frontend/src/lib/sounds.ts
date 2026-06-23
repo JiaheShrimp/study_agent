@@ -103,6 +103,14 @@ export function playClick() {
   tone(600, t, 0.05, 0.06, 'sine')
 }
 
+// 搭子冒出新消息——柔和的「叮咚」提示音（不打扰）
+export function playChatMessage() {
+  const c = getCtx()
+  const t = c.currentTime
+  tone(880, t,        0.12, 0.08, 'sine')   // A5
+  tone(1175, t + 0.1, 0.22, 0.07, 'sine')   // D6
+}
+
 // 任务勾选完成——轻快两音上扬
 export function playTaskDone() {
   const c = getCtx()

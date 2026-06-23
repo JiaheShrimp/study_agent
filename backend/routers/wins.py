@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from storage.records import load_wins, append_win, delete_win, save_wins
+from routers.ai import supervisor_react
 
 router = APIRouter(prefix="/wins", tags=["wins"])
 
@@ -71,6 +72,18 @@ def create_win(body: WinCreate):
         "created_at": datetime.now().isoformat(),
     }
     append_win(win)
+
+    # 搭子：记录赢麻了后必然反馈。
+    # 注意：这条操作信息只作为 context 传给搭子当背景（进 AI 的 prompt），
+    # 不写进对话历史、不在聊天框显示成用户气泡——聊天框里只出现搭子的反馈。
+    today = win["created_at"][:10]
+    recent_today = sum(1 for w in load_wins() if w["created_at"][:10] == today)
+    supervisor_react("win_created", {
+        "content": win["content"],
+        "win_level": win["win_level"],
+        "recent_count_today": recent_today,
+    })
+
     return win
 
 

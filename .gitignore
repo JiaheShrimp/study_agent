@@ -10,10 +10,11 @@ venv/
 backend/data/
 
 # 旧版 CLI 文件（已迁移至 backend/）
-main.py
-features/
-storage/
-data/
+# 注意：用 / 锚定仓库根目录，避免误伤 backend/storage、backend/data 等源码目录
+/main.py
+/features/
+/storage/
+/data/
 
 # Node
 frontend/node_modules/
