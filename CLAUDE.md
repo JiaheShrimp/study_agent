@@ -558,22 +558,23 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - `openai_tools_spec()` 把注册表导出成 OpenAI function-calling 的 `tools` 参数；`execute_tool(name, args)` 统一执行（未知工具/异常都安全兜底）
 - handler 自己负责严格校验落地（如 `assign_task` 复用 `routers/tasks.append_bounty_task()`，clamp hours 0.25~8 / stars 1~5 / content 非空）
 
-**传输层（原生 FC）`ai_client.chat_with_tools()`**：
-- 第一期仅 OpenAI 兼容协议（`supports_tools()` 判定 protocol=="openai"）；带 `tools` + `tool_choice="auto"`，解析模型返回的 `tool_calls` → `[{name, args}]`
-- Anthropic 协议 FC 后续再补（不支持时 `_chat_react` 自动降级普通闲聊，聊天能力不丢）
+**传输层 `ai_client.chat_with_tools()`**：原生 function calling，第一期仅 OpenAI 兼容协议（`supports_tools()` 判 protocol=="openai"），带 `tools` + `tool_choice`，解析 `tool_calls`。支持传 `tool_choice={"type":"function",...}` 强制调某工具。
 
-**聊天流程 `routers/ai._chat_react()`**：
-- `POST /ai/chat` → 把注册表**全部**工具说明喂 AI（`SUPERVISOR_SYSTEM + _TOOL_HINT`），AI 自己决定聊天 or 调工具、调哪个、填什么参数
-- 选了工具 → `execute_tool` 落地、用 `ToolResult.reply`、收集 `meta`；没选 → 用模型自然语言回复；FC 不可用/失败 → 降级普通闲聊（`_plain_chat`）。**绝不误操作**
+**⚠️ 推理模型（thinking mode）的 FC 坑（重要）**：`deepseek-v4-pro` 等推理模型**不支持强制 `tool_choice`**（报 `Thinking mode does not support this tool_choice`），且 `auto` 模式下在强人设下很少主动调工具——原生 FC 在它身上不可靠。但**按指令返回 JSON 极稳定**。故采用**双传输路径**（都由注册表统一驱动）：
+
+**聊天流程 `routers/ai._chat_react()`（双路径）**：
+- **路径 1（意图命中）**：`match_forced_tool()` 用工具的 `intent_keywords` 匹配用户消息（如「派个任务」「给我个任务」）→ 命中则走 `_run_tool_via_json()`：用 `json_extract_prompt()` 让模型按该工具 schema **返回 JSON 填参数** → 解析 → `execute_tool` 落地。这条对 deepseek 稳定（实测 4/4 命中）
+- **路径 2（意图不明）**：走原生 FC `auto`，让模型自己判断要不要调工具，纯聊天就聊天
+- 任一路径失败 → 降级 `_plain_chat()`，**绝不误操作、不丢聊天能力**
 - `ChatOut.assigned_bounty = meta.get("assigned_bounty")`，前端据此联动
 
 **前端联动**：`assigned_bounty=True` 时 ChatSidebar 派发 `agent:bounty-refresh`，Tasks 页监听后立即（0/0.8/2s）刷新 `pendingBounties`，不必等 60s 轮询。
 
 **▶ 加一个新指令（如送 buff / 调目标）只需两步，识别/分发零改动**：
-1. 在 `ai_tools.py` 写个 handler，`@register_tool("grant_buff", "...", {JSON Schema})`，handler 里落地（调对应 storage/router 函数）+ 返回 `ToolResult`
+1. 在 `ai_tools.py` 写个 handler，`@register_tool("grant_buff", "...", {JSON Schema}, intent_keywords=["送我buff","给我加成"])`，handler 里落地（调对应 storage/router 函数）+ 返回 `ToolResult`
 2. 若有前端副作用，在 handler 的 `meta` 里加标记，前端按需监听新事件
 
-就这样——prompt 的工具说明、FC 的 tools 参数、执行分发全自动带上新工具。
+就这样——JSON 提取 prompt、FC 的 tools 参数、意图匹配、执行分发全自动带上新工具。`intent_keywords` 决定它走「稳定的 JSON 提取路径」，留空则只靠 FC auto。
 
 #### 触发点
 

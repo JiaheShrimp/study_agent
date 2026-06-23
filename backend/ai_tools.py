@@ -37,24 +37,64 @@ class Tool:
     description: str
     parameters: dict[str, Any]            # JSON Schema
     handler: Callable[[dict], ToolResult]
+    intent_keywords: list[str] = field(default_factory=list)  # 命中则强制调本工具
 
 
 # 全局注册表：name -> Tool
 TOOL_REGISTRY: dict[str, Tool] = {}
 
 
-def register_tool(name: str, description: str, parameters: dict[str, Any]):
+def register_tool(name: str, description: str, parameters: dict[str, Any],
+                  intent_keywords: list[str] | None = None):
     """装饰器：把一个 handler 注册成工具。
 
+    intent_keywords: 用户消息里命中任一关键词时，强制让模型调用本工具
+    （绕开推理模型在强人设下滑回闲聊的问题）。可留空，靠模型自己判断。
+
     用法：
-        @register_tool("assign_task", "给用户派一个任务", {...JSON Schema...})
+        @register_tool("assign_task", "给用户派一个任务", {...schema...},
+                       intent_keywords=["派任务", "给我个任务"])
         def _assign_task(args: dict) -> ToolResult: ...
     """
     def deco(fn: Callable[[dict], ToolResult]) -> Callable[[dict], ToolResult]:
         TOOL_REGISTRY[name] = Tool(name=name, description=description,
-                                   parameters=parameters, handler=fn)
+                                   parameters=parameters, handler=fn,
+                                   intent_keywords=intent_keywords or [])
         return fn
     return deco
+
+
+def match_forced_tool(user_msg: str) -> str | None:
+    """根据用户消息里的意图关键词，返回应强制调用的工具名（无则 None）。"""
+    msg = (user_msg or "").lower()
+    for tool in TOOL_REGISTRY.values():
+        for kw in tool.intent_keywords:
+            if kw.lower() in msg:
+                return tool.name
+    return None
+
+
+def json_extract_prompt(name: str) -> str | None:
+    """为指定工具生成一段「让模型按 schema 返回 JSON 填参数」的指令。
+
+    用于推理模型（thinking mode）不稳定支持原生 function calling 时的兜底路径：
+    意图已确定要调本工具，只需模型把参数填好。返回 None 表示无此工具。
+    """
+    tool = TOOL_REGISTRY.get(name)
+    if tool is None:
+        return None
+    props = tool.parameters.get("properties", {})
+    required = tool.parameters.get("required", [])
+    field_lines = []
+    for k, spec in props.items():
+        req = "必填" if k in required else "可选"
+        field_lines.append(f"  - {k}（{spec.get('type', 'string')}，{req}）：{spec.get('description', '')}")
+    fields = "\n".join(field_lines)
+    return (
+        f"用户想让你执行：{tool.description}\n"
+        f"请只返回一个 JSON 对象，按以下字段把参数填具体、填合理：\n{fields}\n"
+        "结合你对他的了解填，别套路化。只输出 JSON，不要任何多余文字。"
+    )
 
 
 def openai_tools_spec() -> list[dict]:
@@ -106,6 +146,9 @@ def execute_tool(name: str, args: dict) -> ToolResult:
         },
         "required": ["content"],
     },
+    intent_keywords=["派任务", "派个任务", "派一个任务", "给我任务", "给我个任务",
+                     "给我一个任务", "来个任务", "来个学习任务", "安排任务",
+                     "安排点事", "安排个任务", "布置任务", "整个任务"],
 )
 def _assign_task(args: dict) -> ToolResult:
     """派发赏金任务（复用 routers/tasks 的赏金落地，和随机赏金完全一样）。"""

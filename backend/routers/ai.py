@@ -226,9 +226,11 @@ class ChatOut(BaseModel):
 # 安全：工具 handler 自己严格校验落地；FC 不支持/不可用/失败 → 降级普通闲聊。
 
 _TOOL_HINT = (
-    "\n\n———\n你现在能直接帮他操控这个 App（比如给他派任务）。"
-    "如果他的话明确是想让你做某件你有工具能做的事，就调用对应工具；"
-    "否则就正常聊天回他一句话。拿不准时优先聊天，别乱调工具。"
+    "\n\n———\n【重要】你现在能直接操控这个 App（见提供的工具）。这条规则**高于**上面的聊天人设：\n"
+    "- 只要用户明确在请求一件你有工具能做的事（例如「给我个任务」「派个任务」「安排点事做」"
+    "「来个学习任务」），**必须调用对应工具去真正执行**，绝不能只用聊天敷衍他（比如回「好嘞我看看」却什么都不做）。\n"
+    "- 调用工具时，自己结合对他的了解把参数填具体、填合理。\n"
+    "- 只有当他纯粹在闲聊、倾诉、问问题、没有让你做事时，才正常聊天回一句话。"
 )
 
 
@@ -240,22 +242,68 @@ def _plain_chat() -> str:
     )
 
 
+def _run_tool_via_json(tool_name: str) -> tuple[str, dict] | None:
+    """意图已确定要调某工具 → 让模型按其 schema 返回 JSON 填参数，解析后落地。
+
+    用于推理模型（deepseek-v4-pro 等 thinking mode）不稳定支持原生 FC 的兜底路径：
+    deepseek 能稳定按指令返回 JSON。返回 (reply, meta)，失败返回 None（交回上层降级）。
+    """
+    import ai_tools
+    extract = ai_tools.json_extract_prompt(tool_name)
+    if not extract:
+        return None
+    messages = _history_messages(extract)
+    raw = ai_client.chat_messages(messages, system=SUPERVISOR_SYSTEM, max_tokens=800)
+    if not raw:
+        return None
+    # 容错解析：```json``` / 裸 JSON / 第一个{到最后一个}
+    import json as _json, re as _re
+    text = raw.strip()
+    m = _re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    cand = m.group(1).strip() if m else text
+    args = None
+    for attempt in (cand, cand[cand.find("{"):cand.rfind("}") + 1] if "{" in cand else ""):
+        try:
+            args = _json.loads(attempt)
+            break
+        except Exception:
+            continue
+    if not isinstance(args, dict):
+        return None
+    tr = ai_tools.execute_tool(tool_name, args)
+    if tr.ok:
+        return (tr.reply or "好嘞，给你安排上了。"), tr.meta
+    return None
+
+
 def _chat_react(user_msg: str) -> tuple[str, dict]:
     """
-    带工具能力地处理一条用户消息（原生 function calling 驱动）。
+    带工具能力地处理一条用户消息。
 
     返回 (reply_text, meta)。meta 是工具执行的副作用标记（如 {"assigned_bounty": True}），
     供前端联动；纯聊天时为空 dict。
 
-    流程：FC 调用 → 若 AI 选了工具则 execute_tool 落地、用工具 reply → 否则用 AI
-    的自然语言回复 → FC 不可用/失败时降级普通闲聊。
+    两条传输路径，由工具注册表统一驱动：
+      1. 意图关键词命中某工具 → 走 JSON 提取路径（让模型按 schema 填参数）。
+         因为推理模型对原生 FC 的强制调用支持差，这条路对 deepseek 更稳。
+      2. 没命中 → 走原生 FC 的 auto，让模型自己判断要不要调工具（纯聊天就聊天）。
+    任一路径失败都安全降级到普通闲聊，绝不误操作、也不丢聊天能力。
     """
     import ai_tools
 
     if not ai_client.is_available():
         return _plain_chat(), {}
 
-    # 不支持 FC 的 provider（如 Anthropic，第一期未接）→ 普通闲聊，不丢失对话能力
+    # 路径 1：意图命中 → JSON 提取落地（最稳）
+    forced = ai_tools.match_forced_tool(user_msg)
+    if forced:
+        done = _run_tool_via_json(forced)
+        if done is not None:
+            return done
+        # 提取/落地失败 → 退回闲聊，不卡住用户
+        return _plain_chat(), {}
+
+    # 路径 2：没命中意图 → 原生 FC auto，让模型自己判断
     if not ai_client.supports_tools():
         return _plain_chat(), {}
 
@@ -265,15 +313,13 @@ def _chat_react(user_msg: str) -> tuple[str, dict]:
         tools=ai_tools.openai_tools_spec(),
         system=SUPERVISOR_SYSTEM + _TOOL_HINT,
         max_tokens=800,
+        tool_choice="auto",
     )
-
-    # FC 调用整体失败 → 降级普通闲聊
     if result is None:
         return _plain_chat(), {}
 
     calls = result.get("tool_calls") or []
     if calls:
-        # 第一期：执行 AI 选中的（第一个）工具。多工具链后续可在此扩展为循环。
         meta: dict = {}
         reply_parts: list[str] = []
         for call in calls:
@@ -284,7 +330,6 @@ def _chat_react(user_msg: str) -> tuple[str, dict]:
                     reply_parts.append(tr.reply)
         if reply_parts:
             return "；".join(reply_parts), meta
-        # 工具都没成功 → 用模型文本或兜底
         return (result.get("text") or "好嘞，我看看哈。").strip(), meta
 
     # 没调工具：用模型的自然语言回复（空则兜底）

@@ -198,8 +198,13 @@ def supports_tools() -> bool:
 
 
 def _call_openai_tools(key: str, base_url: str, model: str, system: str,
-                       messages: list[dict], tools: list[dict], max_tokens: int) -> dict:
-    """OpenAI 兼容协议带 tools 的调用，返回模型的 message 对象（含 content / tool_calls）。"""
+                       messages: list[dict], tools: list[dict], max_tokens: int,
+                       tool_choice: Any = "auto") -> dict:
+    """OpenAI 兼容协议带 tools 的调用，返回模型的 message 对象（含 content / tool_calls）。
+
+    tool_choice: "auto"（模型自己决定）/ "none" / 或 {"type":"function","function":{"name":...}}
+    强制调某工具。
+    """
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
     msgs: list[dict] = []
@@ -211,14 +216,14 @@ def _call_openai_tools(key: str, base_url: str, model: str, system: str,
         "max_tokens": max_tokens,
         "messages": msgs,
         "tools": tools,
-        "tool_choice": "auto",
+        "tool_choice": tool_choice,
     }
     resp = _http_post(url, headers, body)
     return resp["choices"][0]["message"]
 
 
 def chat_with_tools(messages: list[dict], tools: list[dict], system: str = "",
-                    max_tokens: int = 800) -> dict | None:
+                    max_tokens: int = 800, tool_choice: Any = "auto") -> dict | None:
     """
     带工具能力地发一段对话（原生 function calling）。
 
@@ -226,6 +231,9 @@ def chat_with_tools(messages: list[dict], tools: list[dict], system: str = "",
       {"text": str|None, "tool_calls": [{"name": str, "args": dict}, ...]}
     - text：模型的自然语言回复（可能为空，若它选择只调工具）
     - tool_calls：模型决定调用的工具列表（解析自 OpenAI tool_calls）
+
+    tool_choice: "auto" 让模型自己决定；传 {"type":"function","function":{"name":"xxx"}}
+    可强制它调某工具（用于「用户明确要求」时不让推理模型滑回闲聊）。
 
     不支持工具的 provider / 不可用 / 出错 → 返回 None，调用方降级到普通聊天。
     """
@@ -236,7 +244,8 @@ def chat_with_tools(messages: list[dict], tools: list[dict], system: str = "",
     model = c["model"] or info["hint_model"]
     base_url = c["custom_base_url"] if c["provider"] == "openai_compat" else info["base_url"]
     try:
-        msg = _call_openai_tools(c["key"], base_url, model, system, messages, tools, max_tokens)
+        msg = _call_openai_tools(c["key"], base_url, model, system, messages, tools,
+                                 max_tokens, tool_choice)
     except Exception:
         return None
 
