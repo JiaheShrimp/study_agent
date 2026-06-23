@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Check, Trash2, Plus, Settings, Star, Clock, Swords, X, Play, Timer, Flame, AlertTriangle, Trophy, RotateCcw, ChevronLeft, ChevronRight, CalendarDays, BarChart2 } from 'lucide-react'
+import { Check, Trash2, Plus, Settings, Star, Clock, Swords, X, Play, Timer, Flame, AlertTriangle, Trophy, RotateCcw, ChevronLeft, ChevronRight, CalendarDays, BarChart2, MessageCircle } from 'lucide-react'
 import { api, type DailyTask, type DailyBounty, type WorkRestConfig, type RoutineTask, type RoutinesData, type ArchivedRoutine } from '@/lib/api'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
@@ -535,6 +535,13 @@ function BountyCard({ bounty, onAccept, onExpire }: {
               ))}
             </span>
           </div>
+          {/* 搭子派发理由（人性化展示） */}
+          {bounty.reason && (
+            <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-700/90 italic">
+              <MessageCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-amber-500" />
+              <span className="leading-snug">{bounty.reason}</span>
+            </div>
+          )}
           {/* Buff 展示 */}
           <div className="mt-3 flex items-center gap-2 bg-amber-100 rounded-xl px-3 py-2">
             <span className="text-xl leading-none">{bounty.buff.emoji}</span>

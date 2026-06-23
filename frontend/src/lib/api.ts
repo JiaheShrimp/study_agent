@@ -210,6 +210,7 @@ export interface DailyBounty {
   status: 'pending' | 'accepted' | 'done' | 'expired'
   popup_at: string   // ISO datetime
   ai_generated?: boolean
+  reason?: string    // AI 派发这条任务的理由（搭子口吻）
 }
 
 export interface AIProviderMeta {

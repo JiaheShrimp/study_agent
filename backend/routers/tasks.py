@@ -287,7 +287,7 @@ import ai_client
 
 
 def _all_task_contents() -> list[dict]:
-    """从所有历史执行记录中提取去重的任务内容。"""
+    """从所有历史执行记录中提取去重的任务内容（仅 content/hours/stars，供降级模式用）。"""
     import os as _os2
     path = _os2.path.join(DATA_DIR, "task_runs.json")
     runs: list = _read(path, [])
@@ -301,6 +301,44 @@ def _all_task_contents() -> list[dict]:
                 "stars": r.get("task_stars", 3),
             }
     return list(seen.values())
+
+
+def _task_profiles() -> list[dict]:
+    """带画像的历史任务：每个任务做过几次、最近一次什么时候、成功率。
+
+    给 AI 派赏金任务用——它能据此判断哪些是你常做的、哪些荒废了、
+    哪些一直没做好，从而派得更懂你，而不是从一堆任务名里机械挑。
+    按最近执行时间倒序。
+    """
+    import os as _os4
+    path = _os4.path.join(DATA_DIR, "task_runs.json")
+    runs: list = _read(path, [])
+    prof: dict[str, dict] = {}
+    for r in runs:
+        c = r.get("task_content", "").strip()
+        if not c:
+            continue
+        p = prof.setdefault(c, {
+            "content": c,
+            "hours": r.get("task_hours", 1.0),
+            "stars": r.get("task_stars", 3),
+            "times": 0,          # 做过几次
+            "success": 0,        # 成功几次
+            "last_date": "",     # 最近一次执行日期
+        })
+        p["times"] += 1
+        if r.get("success"):
+            p["success"] += 1
+        d = r.get("date", "")
+        if d > p["last_date"]:
+            p["last_date"] = d
+        # hours/stars 以最近一次为准
+        if d >= p["last_date"]:
+            p["hours"] = r.get("task_hours", p["hours"])
+            p["stars"] = r.get("task_stars", p["stars"])
+    items = list(prof.values())
+    items.sort(key=lambda x: x["last_date"], reverse=True)
+    return items
 
 
 def _game_day_range(date_str: str) -> tuple[Datetime, Datetime]:
@@ -323,45 +361,95 @@ def _generate_popup_time(start: Datetime, end: Datetime) -> str:
 
 def _ai_select_bounties(history: list[dict], today: str) -> list[dict] | None:
     """
-    调用 AI 从历史任务中筛选并创作赏金任务。
-    返回 list[{content, hours, stars}]（0-2 条），失败返回 None（调用方降级）。
+    让 AI 像懂你的搭子一样，结合你的完整成长画像，为今天派 0-2 个赏金任务。
+
+    喂给 AI 的不只是任务名，而是：
+      - 你的整体画像（赢麻了 / 专注时长 / 习惯，来自 supervisor_context）
+      - 每个历史任务做过几次、最近一次什么时候、成功率
+    让它据此挑出/设计对你此刻真正有意义的任务，并给一句「为什么给你派这个」。
+
+    返回 list[{content, hours, stars, reason}]（0-2 条），失败返回 None（调用方降级）。
     """
-    history_lines = "\n".join(
-        f"- {item['content']}（{item['hours']}h，重要度{item['stars']}星）"
-        for item in history
+    # 完整画像（搭子也在用的聚合）——让 AI 真正了解这个人
+    try:
+        from supervisor_context import build_summary
+        profile = build_summary()
+    except Exception:
+        profile = ""
+
+    # 带频次/时间的任务画像
+    profiles = _task_profiles()
+
+    def _ago(last: str) -> str:
+        if not last:
+            return "很久没做"
+        try:
+            gap = (Date.fromisoformat(today) - Date.fromisoformat(last)).days
+        except Exception:
+            return ""
+        if gap <= 0:
+            return "今天做过"
+        if gap == 1:
+            return "昨天做过"
+        if gap <= 7:
+            return f"{gap}天前做过"
+        if gap <= 30:
+            return f"约{gap // 7}周前"
+        return "一个多月没做了"
+
+    task_lines = "\n".join(
+        f"- {p['content']}（通常{p['hours']}h、{p['stars']}星；"
+        f"做过{p['times']}次、成功{p['success']}次、{_ago(p['last_date'])}）"
+        for p in profiles
     )
-    prompt = f"""今天是 {today}，我是一个游戏化自我管理 app 的用户。
-下面是我历史上执行过的任务列表：
 
-{history_lines}
+    prompt = f"""今天是 {today}。你是一个游戏化成长 App 里住着的小伙伴——用户的老朋友、搭子，很懂他这个人。
+现在轮到你给他派 0-2 个今天的「赏金任务」（一种带奖励的特别任务，他可以接受或拒绝）。
 
-请帮我从中挑选或创作 0-2 个今天的"赏金任务"，遵守以下规则：
-1. 排除明显是一次性的任务（例如某个具体项目的某个里程碑、特定活动、特定日期相关内容）
-2. 优先选择可以重复做、有持续价值的任务（练习、学习、整理类）
-3. 可以在历史任务基础上进行创新改编，让任务更有趣，但保持合理的时长（0.5-4h）和重要度（1-5星）
-4. 如果历史任务都是一次性的，可以创作 0 个
+【你对他的了解】
+{profile or "（暂时还不太了解他，凭下面的任务记录发挥。）"}
 
-以 JSON 数组格式返回，每个元素包含 content（字符串）、hours（数字）、stars（整数1-5）：
-[{{"content": "...", "hours": 1.0, "stars": 3}}]
+【他做过的任务和频率】
+{task_lines or "（还没有任务记录。）"}
 
-如果返回 0 个，返回空数组 []。只返回 JSON，不要其他说明。"""
+像一个真正为他着想的朋友那样思考，而不是机械地从列表里挑：
+- 挑出/设计此刻对他真正有意义的事——可以是他坚持得好、值得再推一把的；也可以是荒废了一阵、温柔提醒他捡起来的；还可以结合他最近的状态创新一个新任务。
+- 不要派一次性的、和特定项目/日期绑死的任务。
+- 时长 0.5~4h、重要度 1~5 星，合理即可。
+- 如果今天实在没有合适的，就派 0 个（返回空数组）。宁缺毋滥，别硬凑套路任务。
+
+每个任务给一句**温暖、具体、像朋友说话**的派发理由（reason，≤30字，说清你为什么给他派这个，不要喊口号/说教）。
+
+以 JSON 数组返回，每个元素含 content（字符串）、hours（数字）、stars（整数1-5）、reason（字符串）：
+[{{"content": "...", "hours": 1.0, "stars": 3, "reason": "..."}}]
+
+返回 0 个就给空数组 []。只返回 JSON，不要其他说明。"""
 
     result = ai_client.chat_json(prompt)
     if not isinstance(result, list):
         return None
-    # 校验并清洗每条
+    # 校验并清洗每条；最多保留 2 条**有效**任务（跳过的脏数据不占名额）
     cleaned = []
-    for item in result[:2]:
+    for item in result:
+        if len(cleaned) >= 2:
+            break
         if not isinstance(item, dict):
             continue
         content = str(item.get("content", "")).strip()
         if not content:
             continue
-        hours = float(item.get("hours", 1.0))
+        try:
+            hours = float(item.get("hours", 1.0))
+        except (TypeError, ValueError):
+            hours = 1.0
         hours = max(0.25, min(8.0, hours))
-        stars = int(item.get("stars", 3))
+        try:
+            stars = int(item.get("stars", 3))
+        except (TypeError, ValueError):
+            stars = 3
         stars = max(1, min(5, stars))
-        cleaned.append({"content": content, "hours": hours, "stars": stars})
+        reason = str(item.get("reason", "")).strip()[:40]
+        cleaned.append({"content": content, "hours": hours, "stars": stars, "reason": reason})
     return cleaned
 
 
@@ -384,6 +472,7 @@ class DailyBountyNew(BaseModel):
     status: str          # pending | accepted | done | expired
     popup_at: str        # ISO datetime，前端据此决定何时弹出
     ai_generated: bool = False  # 标记是否由 AI 生成/筛选
+    reason: str = ""     # AI 派发这条任务的理由（搭子口吻，人性化展示）
 
 
 @router.get("/bounty/daily", response_model=list[DailyBountyNew])
@@ -436,6 +525,7 @@ def generate_daily_bounties(date: str | None = None):
             "status": "pending",
             "popup_at": _generate_popup_time(start, end),
             "ai_generated": ai_generated,
+            "reason": item.get("reason", ""),
         })
 
     save_daily_bounties(today, {"generated": True, "bounties": bounties})
