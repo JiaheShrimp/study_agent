@@ -475,7 +475,7 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - [x] 保留任务（每日任务可勾「保留任务」跨天不消失，init 时迁移过往未完成的保留任务到今天，计算/显示/计时与普通任务一致）
 - [x] 搭子聊天栏按天清零（GET /dialogue 只返回今天，全量历史保留后台；记忆 = 今天 16 条 + 更早随机抽样 6 条；业务数据全量喂 AI）
 - [x] AI 派发赏金更人性化（喂完整画像 + 任务频次，搭子口吻派任务 + 派发理由 reason）
-- [x] 聊天工具调用第一期（聊天里跟搭子要任务，AI 判断意图后落地赏金任务，白名单 + 严格校验 + 即时刷新）
+- [x] AI 接管 agent 操控权（工具注册表 ai_tools.py + 原生 function calling 传输层 + 统一识别分发；加新指令只写 handler + @register_tool，识别/分发零改动；第一期工具 assign_task）
 
 **待开发**：
 - [ ] Buff 效果实际结算接入（task_score / daily_score / goal_shield / routine_double / lucky_dice）
@@ -548,13 +548,32 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - 检测到新 assistant 消息（对比最后 id）播 `playChatMessage()` 提示音（首次加载不播）。
 - **「正在思考」动画**：发消息 / 收到 `agent:dialogue-refresh` 时显示三点跳动气泡（CSS `animate-typing-dot`，在 `index.css`），新反馈到达时收尾；30s 超时兜底自动关，防止反馈不来时一直转。
 
-#### 聊天里的工具调用：搭子能按指令派任务（已实现，第一期）
+#### 聊天里的工具调用：搭子接管 agent 操控权（统一地基，已实现）
 
-聊天不再只会回话。`POST /ai/chat` 每次先让搭子判断你是想**聊天**还是想**要任务**：
-- 走 `_chat_react()` + `_TOOL_SYSTEM`（在 `SUPERVISOR_SYSTEM` 后追加工具说明），让 AI **只返回一个 JSON**：`{"action":"chat","reply":...}` 或 `{"action":"assign_task","content","hours","stars","reply":...}`
-- `assign_task` 且校验通过 → 调 `routers/tasks.append_bounty_task()` 落地成一个**赏金任务**（和随机弹出的赏金完全一样：带 buff、走 `accepted→done`，区别只是 `popup_at=now` 立即可见、由你开口要触发）。reply 用 AI 给的那句确认
-- **安全**：工具白名单第一期只有 `assign_task`；`append_bounty_task` 严格 clamp（hours 0.25~8、stars 1~5、content 非空截断）；AI 返回非 JSON / 不可用 → 降级为普通闲聊，绝不误派
-- **前端联动**：`ChatOut.assigned_bounty=True` 时，ChatSidebar 派发 `agent:bounty-refresh`，Tasks 页监听后立即（0/0.8/2s）刷新 `pendingBounties`，新赏金马上出现，不必等 60s 轮询
+> **核心理念**：这不是「派任务」这一个孤立功能，而是「**AI 接管 agent 操控权**」的统一能力。所有「让 AI 帮我操控 agent」的指令共用一套**工具注册表 + 原生 function calling**，加新指令不碰识别/分发逻辑。
+
+**工具注册表 `backend/ai_tools.py`**：
+- 每个 `Tool` = `name / description / parameters(JSON Schema) / handler`，存全局 `TOOL_REGISTRY`
+- `@register_tool(name, description, parameters)` 装饰器注册；handler 收 `args: dict`、返回 `ToolResult(ok, reply, meta)`（`meta` 是副作用标记，供前端联动）
+- `openai_tools_spec()` 把注册表导出成 OpenAI function-calling 的 `tools` 参数；`execute_tool(name, args)` 统一执行（未知工具/异常都安全兜底）
+- handler 自己负责严格校验落地（如 `assign_task` 复用 `routers/tasks.append_bounty_task()`，clamp hours 0.25~8 / stars 1~5 / content 非空）
+
+**传输层（原生 FC）`ai_client.chat_with_tools()`**：
+- 第一期仅 OpenAI 兼容协议（`supports_tools()` 判定 protocol=="openai"）；带 `tools` + `tool_choice="auto"`，解析模型返回的 `tool_calls` → `[{name, args}]`
+- Anthropic 协议 FC 后续再补（不支持时 `_chat_react` 自动降级普通闲聊，聊天能力不丢）
+
+**聊天流程 `routers/ai._chat_react()`**：
+- `POST /ai/chat` → 把注册表**全部**工具说明喂 AI（`SUPERVISOR_SYSTEM + _TOOL_HINT`），AI 自己决定聊天 or 调工具、调哪个、填什么参数
+- 选了工具 → `execute_tool` 落地、用 `ToolResult.reply`、收集 `meta`；没选 → 用模型自然语言回复；FC 不可用/失败 → 降级普通闲聊（`_plain_chat`）。**绝不误操作**
+- `ChatOut.assigned_bounty = meta.get("assigned_bounty")`，前端据此联动
+
+**前端联动**：`assigned_bounty=True` 时 ChatSidebar 派发 `agent:bounty-refresh`，Tasks 页监听后立即（0/0.8/2s）刷新 `pendingBounties`，不必等 60s 轮询。
+
+**▶ 加一个新指令（如送 buff / 调目标）只需两步，识别/分发零改动**：
+1. 在 `ai_tools.py` 写个 handler，`@register_tool("grant_buff", "...", {JSON Schema})`，handler 里落地（调对应 storage/router 函数）+ 返回 `ToolResult`
+2. 若有前端副作用，在 handler 的 `meta` 里加标记，前端按需监听新事件
+
+就这样——prompt 的工具说明、FC 的 tools 参数、执行分发全自动带上新工具。
 
 #### 触发点
 
@@ -567,10 +586,11 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 
 - 任务完成 / 提前完成 / 力竭、常规打卡里程碑（`routers/tasks.py`）
 - 每日首次打开
-- 更多聊天工具（送 buff、调目标等；目前只有 assign_task）
+- 更多聊天工具（送 buff、调目标等）——在 `ai_tools.py` 加 handler + `@register_tool` 即可，见上「加一个新指令」
+- Anthropic 协议的 function calling 传输层（目前仅 OpenAI 兼容，Anthropic 自动降级闲聊）
 
 #### 实现文件
 
 - 后端：`routers/ai.py`（搭子核心 + dialogue/chat 接口）+ `storage/ai_dialogue.py`（对话历史/记忆）+ `supervisor_context.py`（业务数据聚合 + 随机抽样）+ `ai_client.chat_messages()`（多轮）+ `storage/tasks.py` 的 `load_task_runs()`
 - 前端：`components/ChatSidebar.tsx`（聊天栏 + 思考动画，派任务后派发 `agent:bounty-refresh`）+ `AppLayout` 左侧挂载 + `api.ts` 的 `ai.dialogue / ai.chat` + `sounds.ts` 的 `playChatMessage()` + `index.css` 的 `animate-typing-dot` + `pages/Wins.tsx` 记录后派发 `agent:dialogue-refresh` + `pages/Tasks.tsx` 监听 `agent:bounty-refresh` 立即刷新赏金
-- 聊天工具调用：`routers/ai.py` 的 `_chat_react()` / `_TOOL_SYSTEM` + `routers/tasks.py` 的 `append_bounty_task()`（复用赏金落地）
+- 聊天工具调用（AI 接管 agent）：`ai_tools.py`（工具注册表 + execute_tool）+ `ai_client.chat_with_tools()`（OpenAI 原生 FC 传输层）+ `routers/ai.py` 的 `_chat_react()` + `routers/tasks.py` 的 `append_bounty_task()`（assign_task 落地）

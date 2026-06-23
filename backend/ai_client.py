@@ -189,6 +189,72 @@ def chat_messages(messages: list[dict], system: str = "", max_tokens: int = 1024
         return None
 
 
+def supports_tools() -> bool:
+    """当前 provider 是否支持原生 function calling。第一期仅 OpenAI 兼容协议。"""
+    if not is_available():
+        return False
+    info = PROVIDERS.get(_cfg()["provider"])
+    return bool(info) and info["protocol"] == "openai"
+
+
+def _call_openai_tools(key: str, base_url: str, model: str, system: str,
+                       messages: list[dict], tools: list[dict], max_tokens: int) -> dict:
+    """OpenAI 兼容协议带 tools 的调用，返回模型的 message 对象（含 content / tool_calls）。"""
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
+    msgs: list[dict] = []
+    if system:
+        msgs.append({"role": "system", "content": system})
+    msgs.extend(messages)
+    body: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": msgs,
+        "tools": tools,
+        "tool_choice": "auto",
+    }
+    resp = _http_post(url, headers, body)
+    return resp["choices"][0]["message"]
+
+
+def chat_with_tools(messages: list[dict], tools: list[dict], system: str = "",
+                    max_tokens: int = 800) -> dict | None:
+    """
+    带工具能力地发一段对话（原生 function calling）。
+
+    返回一个 dict：
+      {"text": str|None, "tool_calls": [{"name": str, "args": dict}, ...]}
+    - text：模型的自然语言回复（可能为空，若它选择只调工具）
+    - tool_calls：模型决定调用的工具列表（解析自 OpenAI tool_calls）
+
+    不支持工具的 provider / 不可用 / 出错 → 返回 None，调用方降级到普通聊天。
+    """
+    if not supports_tools() or not messages or not tools:
+        return None
+    c = _cfg()
+    info = PROVIDERS[c["provider"]]
+    model = c["model"] or info["hint_model"]
+    base_url = c["custom_base_url"] if c["provider"] == "openai_compat" else info["base_url"]
+    try:
+        msg = _call_openai_tools(c["key"], base_url, model, system, messages, tools, max_tokens)
+    except Exception:
+        return None
+
+    text = msg.get("content") or None
+    calls: list[dict] = []
+    for tc in msg.get("tool_calls") or []:
+        fn = tc.get("function", {})
+        name = fn.get("name", "")
+        raw_args = fn.get("arguments", "{}")
+        try:
+            args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+        except Exception:
+            args = {}
+        if name:
+            calls.append({"name": name, "args": args})
+    return {"text": text, "tool_calls": calls}
+
+
 def chat(prompt: str, system: str = "", max_tokens: int = 1024) -> str | None:
     """
     单轮：发一条 user 消息，返回文本。是 chat_messages 的便捷包装。
