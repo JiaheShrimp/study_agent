@@ -122,8 +122,9 @@ def _history_messages(extra_user: str) -> list[dict]:
         },
     ]
 
-    # 拼最近对话（含搭子自己的回复，这样它知道说过什么，避免重复）
-    for t in ai_dialogue.recent_turns(limit=16):
+    # 拼记忆对话：今天的全部 + 更早历史的随机抽样（学习语料，让回复更人性化）。
+    # 含搭子自己的回复，这样它知道说过什么、避免今天内重复。
+    for t in ai_dialogue.memory_turns(today_limit=16, past_sample=6):
         role = t.get("role")
         content = t.get("content", "")
         if role in ("user", "assistant") and content:
@@ -196,8 +197,12 @@ class DialogueTurn(BaseModel):
 
 @router.get("/dialogue", response_model=list[DialogueTurn])
 def get_dialogue(limit: int = 50):
-    """聊天栏拉取最近对话历史渲染。"""
-    return ai_dialogue.load_dialogue()[-limit:]
+    """聊天栏拉取对话渲染——只返回今天（游戏日）的，按天清零。
+
+    过去的对话仍保留在后台文件里，只是不呈现给用户；
+    搭子生成回复时仍可把历史当学习语料（见 memory_turns）。
+    """
+    return ai_dialogue.today_turns()[-limit:]
 
 
 class ChatIn(BaseModel):

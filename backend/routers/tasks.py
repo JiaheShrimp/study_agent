@@ -17,7 +17,7 @@ from storage.tasks import (
     load_daily_bounties, save_daily_bounties,
     load_routines, save_routines,
     load_excluded_dates, save_excluded_dates,
-    _read, _write, DATA_DIR,
+    _read, _write, DATA_DIR, DAILY_TASKS_FILE,
 )
 from storage.config import load_config
 
@@ -45,12 +45,14 @@ class DailyTask(BaseModel):
     from_template: bool
     run_status: str = "none"   # none | running_failed | completed
     count_in_effective: bool = True   # 是否计入有效学习时间
+    keep: bool = False   # 保留任务：未必今天完成，跨天保留，任意时候可执行
 
 class DailyTaskCreate(BaseModel):
     content: str
     hours: float
     stars: int
     count_in_effective: bool = True
+    keep: bool = False
 
 class BountyTask(BaseModel):
     id: str
@@ -118,13 +120,51 @@ def get_daily_tasks(date: str | None = None):
     today = date or _game_today()
     return load_daily_tasks(today)
 
+def _migrate_kept_tasks(today: str) -> list[dict]:
+    """把过往日期里未完成的「保留任务」迁移到今天。
+
+    保留任务（keep=True）跨天保留：扫描所有早于今天的日期，把其中未完成的
+    保留任务从原日期移除、合并进今天的列表（保持原 id / 进度 / 状态）。
+    迁移后从原日期删除，避免在历史里残留为「未完成」。
+    """
+    all_days: dict = _read(DAILY_TASKS_FILE, {})
+    today_tasks = list(all_days.get(today, []))
+    today_ids = {t["id"] for t in today_tasks}
+    moved: list[dict] = []
+    changed = False
+    for day in sorted(all_days.keys()):
+        if day >= today:
+            continue
+        remaining = []
+        for t in all_days[day]:
+            done = t.get("done") or t.get("run_status") == "completed"
+            if t.get("keep") and not done:
+                # 迁移到今天（去重，避免重复）
+                if t["id"] not in today_ids:
+                    moved.append(t)
+                    today_ids.add(t["id"])
+                changed = True
+            else:
+                remaining.append(t)
+        if len(remaining) != len(all_days[day]):
+            all_days[day] = remaining
+    if moved:
+        all_days[today] = today_tasks + moved
+        changed = True
+    if changed:
+        _write(DAILY_TASKS_FILE, all_days)
+    return all_days.get(today, today_tasks)
+
+
 @router.post("/daily/init", response_model=list[DailyTask])
 def init_daily_tasks(date: str | None = None):
     """用模板初始化当日任务（每天第一次打开时调用）。"""
     today = date or _game_today()
+    # 先把过往未完成的保留任务迁移到今天（即使今天已有任务也要迁）
+    _migrate_kept_tasks(today)
     existing = load_daily_tasks(today)
     if existing:
-        return existing  # 已初始化，不覆盖
+        return existing  # 已初始化（或已有迁移来的保留任务），不再套模板
     templates = load_templates()
     tasks = [
         {

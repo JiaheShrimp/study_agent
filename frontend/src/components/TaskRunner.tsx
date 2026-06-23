@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { api, type DailyTask, type ScoreBreakdown } from '@/lib/api'
 import { cn, gameToday } from '@/lib/utils'
 import { playGoalReached } from '@/lib/sounds'
@@ -8,6 +9,27 @@ function fmt(s: number) {
   const m = Math.floor(s / 60).toString().padStart(2, '0')
   const sec = (s % 60).toString().padStart(2, '0')
   return `${m}:${sec}`
+}
+
+// 进行中计时的持久化 key（关窗后下次打开据此恢复/判中断）
+export const ACTIVE_RUN_KEY = 'agent.activeRun'
+
+// localStorage 中保存的进行中计时快照
+export interface ActiveRunSnapshot {
+  task: DailyTask
+  startedAtISO: string      // 计时开始的墙钟时间（ISO）
+  startedMonoBase: number   // 对应的 performance.now() 基准（仅本会话有意义）
+  pausedTotal: number       // 累计已暂停秒数
+  pauseCount: number
+  totalRestBudget: number
+  restSecsLeft: number
+  initProgress: number      // 续传时的初始已工作秒数
+  workedSecs: number        // 快照时刻的当前已工作秒数（关窗判中断用这个）
+  workMins: number
+  restMins: number
+  multiplier: number
+  reached: boolean          // 是否已到达预计时间
+  savedAtISO: string        // 快照写入时间（用于关窗后计算流逝）
 }
 
 // ── 倒计时弹窗 ────────────────────────────────────────────────
@@ -321,19 +343,16 @@ function ResultPage({
 // ── 主组件 ────────────────────────────────────────────────────
 type Phase = 'countdown' | 'running' | 'result'
 
-
+// 运行态：用时间戳算差值，不再靠 rAF 累加，所以窗口缩小/后台都照常走表
 interface RunState {
-  workSecsLeft: number    // 当前工作段剩余秒
-  restSecsLeft: number    // 当前休息/暂停预算剩余秒
-  totalRestBudget: number // 总休息预算（随工作时间增加）
-  workedSecs: number      // 累计工作秒数（正计时，从 0 开始）
-  pausedSecs: number      // 累计暂停秒数
+  restSecsLeft: number    // 休息/暂停预算剩余秒（只在手动暂停时消耗）
+  totalRestBudget: number // 总休息预算
+  workedSecs: number      // 已工作秒数（= 流逝 - 暂停，实时算出）
+  pausedSecs: number      // 累计已暂停秒数
   pauseCount: number
   paused: boolean
-  isResting: boolean      // 是否在自动休息段
   runnerPct: number       // 0-100
-  overtime: boolean       // 是否已超过预计时间（达到 totalSecs 后仍在计时）
-  success: boolean
+  overtime: boolean       // 是否已超过预计时间
   ended: boolean
 }
 
@@ -344,6 +363,10 @@ export function TaskRunner({
   restMins = 5,
   multiplier = 1.0,
   initialWorkedSecs = 0,
+  initialRestSecsLeft,
+  resumeStartedAtISO,
+  resumePausedTotal = 0,
+  resumePauseCount = 0,
 }: {
   task: DailyTask
   onClose: () => void
@@ -351,48 +374,97 @@ export function TaskRunner({
   restMins?: number
   multiplier?: number
   initialWorkedSecs?: number
+  // 关窗恢复时传入：保留休息预算/暂停统计/原始开始时间，让计时无缝续上
+  initialRestSecsLeft?: number
+  resumeStartedAtISO?: string
+  resumePausedTotal?: number
+  resumePauseCount?: number
 }) {
   const WORK_SECS = workMins * 60
   const REST_SECS = restMins * 60
 
   const totalSecs = Math.round(task.hours * 3600)
-  const startedAtRef = useRef<string>('')   // 记录实际开始时间
 
   // 总休息预算 = 按预计时长换算（每 work_mins 工作配 rest_mins 休息），开局一次性给满
-  // 例：1h 任务、每 30min 休息 5min → 3600/1800 × 300 = 600s = 10 分钟
   const TOTAL_REST_BUDGET = Math.max(REST_SECS, Math.round((totalSecs / WORK_SECS) * REST_SECS))
 
-  // 从上次暂停进度继续时的初始状态
-  const initProgress = Math.min(initialWorkedSecs, totalSecs - 1)
+  const initProgress = Math.min(initialWorkedSecs, Math.max(0, totalSecs - 1))
   const initRunnerPct = initProgress > 0 ? 2 + (initProgress / totalSecs) * 90 : 2
-  const initRestBudget = TOTAL_REST_BUDGET
+  const initRestBudget = initialRestSecsLeft ?? TOTAL_REST_BUDGET
 
   const [phase, setPhase] = useState<Phase>('countdown')
   const [endReason, setEndReason] = useState<EndReason>('complete')
   const [scoreBreakdown, setScoreBreakdown] = useState<ScoreBreakdown | null>(null)
   const [frame, setFrame] = useState(0)
+
+  // ── 时间基准（单调时钟）─────────────────────────────────────
+  // workedSecs = (now - startMono)/1000 - pausedTotal - 当前暂停段时长
+  // 用 performance.now() 而非 Date.now()，避免系统改时间导致跳变
+  const startMonoRef = useRef<number>(0)        // 计时基准点（performance.now）
+  // 本会话内新增的暂停秒（initProgress 已扣除续传前的暂停，故这里从 0 起算）
+  const pausedTotalRef = useRef<number>(0)
+  // 续传前累计的历史暂停秒，仅用于显示总暂停时长
+  const historicalPausedRef = useRef<number>(resumePausedTotal)
+  const pauseStartedRef = useRef<number>(0)     // 本次暂停开始的 performance.now（0=未暂停）
+  const pauseRestBaseRef = useRef<number>(initRestBudget)   // 暂停开始时的休息预算基准
+  // 计时开始的墙钟时间（写入 task_run 的 started_at；恢复时沿用原值）
+  const startedAtRef = useRef<string>(resumeStartedAtISO ?? '')
+
   const stateRef = useRef<RunState>({
-    workSecsLeft: WORK_SECS,
     restSecsLeft: initRestBudget,
-    totalRestBudget: initRestBudget,
+    totalRestBudget: TOTAL_REST_BUDGET,
     workedSecs: initProgress,
-    pausedSecs: 0,
-    pauseCount: 0,
+    pausedSecs: resumePausedTotal,
+    pauseCount: resumePauseCount,
     paused: false,
-    isResting: false,
     runnerPct: initRunnerPct,
     overtime: initProgress >= totalSecs,
-    success: false,
     ended: false,
   })
-  // 到点提示横幅是否显示；reachedRef 防止到点音效/横幅重复触发
+
+  // 到点提示横幅；reachedRef 防止重复触发
   const [showReachedBanner, setShowReachedBanner] = useState(false)
   const reachedRef = useRef<boolean>(initProgress >= totalSecs)
   const [display, setDisplay] = useState({ ...stateRef.current })
-  const rafRef = useRef<number>(0)
-  const lastTickRef = useRef<number>(0)
+  const tickIdRef = useRef<number>(0)
+
+  // 计算当前已工作秒数（基于时间戳，不依赖渲染频率）
+  const computeWorked = useCallback(() => {
+    const now = performance.now()
+    const elapsed = (now - startMonoRef.current) / 1000
+    const inPause = pauseStartedRef.current > 0 ? (now - pauseStartedRef.current) / 1000 : 0
+    return initProgress + elapsed - pausedTotalRef.current - inPause
+  }, [initProgress])
+
+  // 把进行中状态写入 localStorage（关窗后下次打开恢复/判中断）
+  const persist = useCallback(() => {
+    const s = stateRef.current
+    if (s.ended) return
+    const snap: ActiveRunSnapshot = {
+      task,
+      startedAtISO: startedAtRef.current,
+      startedMonoBase: startMonoRef.current,
+      pausedTotal: pausedTotalRef.current,
+      pauseCount: s.pauseCount,
+      totalRestBudget: s.totalRestBudget,
+      restSecsLeft: s.restSecsLeft,
+      initProgress,
+      workedSecs: s.workedSecs,
+      workMins,
+      restMins,
+      multiplier,
+      reached: reachedRef.current,
+      savedAtISO: new Date().toISOString(),
+    }
+    try { localStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(snap)) } catch {}
+  }, [task, initProgress, workMins, restMins, multiplier])
+
+  function clearPersist() {
+    try { localStorage.removeItem(ACTIVE_RUN_KEY) } catch {}
+  }
 
   function finishRun(s: RunState, reason: EndReason) {
+    clearPersist()
     const today = gameToday()
     api.tasks.saveRun({
       task_id: task.id,
@@ -401,7 +473,7 @@ export function TaskRunner({
       success: reason === 'complete' || reason === 'early',
       started_at: startedAtRef.current,
       ended_at: new Date().toISOString(),
-      actual_seconds: Math.round(s.workedSecs - initProgress),
+      actual_seconds: Math.round(s.workedSecs),
       pause_count: s.pauseCount,
       pause_seconds: Math.round(s.pausedSecs),
       task_hours: task.hours,
@@ -409,49 +481,43 @@ export function TaskRunner({
       end_reason: reason,
       rest_remaining_secs: Math.round(s.restSecsLeft),
       multiplier,
+      // 注意：存总已工作秒数（含续传进度），中断后下次可据此续传
     }).then(res => setScoreBreakdown(res.score_breakdown)).catch(() => {})
     setEndReason(reason)
     setPhase('result')
   }
 
-  const workSecsConst = WORK_SECS
-  const restSecsConst = REST_SECS
-
+  // ── 计时循环：每 250ms 刷新（后台被节流也无所谓，数字靠时间戳算永远准）──
   const tick = useCallback(() => {
-    const now = performance.now()
-    const delta = (now - lastTickRef.current) / 1000  // 秒
-    lastTickRef.current = now
     const s = stateRef.current
-
     if (s.ended) return
 
     if (s.paused) {
-      // 暂停时：消耗休息预算
-      s.restSecsLeft = Math.max(0, s.restSecsLeft - delta)
-      s.pausedSecs += delta
+      // 暂停中：消耗休息预算（手动暂停才扣，与窗口前后台无关）
+      // 用「暂停开始时的剩余」减去本次暂停已消耗
+      const now = performance.now()
+      const inPause = (now - pauseStartedRef.current) / 1000
+      s.restSecsLeft = Math.max(0, pauseRestBaseRef.current - inPause)
+      s.pausedSecs = historicalPausedRef.current + pausedTotalRef.current + inPause
 
       if (s.restSecsLeft <= 0) {
-        // 失败：休息时间耗尽
+        // 力竭：休息预算耗尽
         s.ended = true
-        s.success = false
+        s.paused = false
+        pausedTotalRef.current += inPause
+        s.pausedSecs = historicalPausedRef.current + pausedTotalRef.current
+        pauseStartedRef.current = 0
         setDisplay({ ...s })
         finishRun(s, 'failed')
         return
       }
-    } else if (s.isResting) {
-      // 自动休息段：小人停止，休息时间自动恢复（但不超过预算上限）
-      // 休息段不消耗预算，让玩家缓口气
-      s.restSecsLeft = Math.min(s.totalRestBudget, s.restSecsLeft + delta * 0.5)
     } else {
-      // 工作中：小人前进（正计时，从 0 累加，到预计时间后不停止）
-      s.workedSecs += delta
-      s.workSecsLeft -= delta
-
-      // 进度：已工作时间 / 总任务时间，封顶 100%（超时后小人停在终点）
+      // 工作中：已工作时长 = 实时算出
+      s.workedSecs = computeWorked()
       const progress = Math.min(s.workedSecs / totalSecs, 1)
-      s.runnerPct = 2 + progress * 90  // 2% ~ 92%
+      s.runnerPct = 2 + progress * 90
 
-      // 到达预计时间：不结束，弹到点提示 + 音效（仅一次），继续计时进入超时态
+      // 到达预计时间：弹提示 + 音效（仅一次），继续计时进入超时态
       if (s.workedSecs >= totalSecs && !reachedRef.current) {
         reachedRef.current = true
         s.overtime = true
@@ -460,30 +526,25 @@ export function TaskRunner({
         setShowReachedBanner(true)
         setTimeout(() => setShowReachedBanner(false), 4000)
       }
-
-      // 工作段结束后进入休息段
-      if (s.workSecsLeft <= 0) {
-        s.isResting = true
-        s.workSecsLeft = workSecsConst  // 重置下一个工作段
-        setTimeout(() => {
-          stateRef.current.isResting = false
-        }, restSecsConst * 1000)
-      }
     }
 
     setDisplay({ ...s })
-    rafRef.current = requestAnimationFrame(tick)
-  }, [totalSecs, task.id, workSecsConst, restSecsConst])
+    persist()
+  }, [computeWorked, totalSecs, persist])
 
   useEffect(() => {
     if (phase !== 'running') return
-    startedAtRef.current = new Date().toISOString()
-    lastTickRef.current = performance.now()
-    rafRef.current = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [phase, tick])
+    // 首次进入运行态：建立时间基准
+    if (startMonoRef.current === 0) {
+      startMonoRef.current = performance.now()
+      if (!startedAtRef.current) startedAtRef.current = new Date().toISOString()
+    }
+    persist()
+    tickIdRef.current = window.setInterval(tick, 250)
+    return () => clearInterval(tickIdRef.current)
+  }, [phase, tick, persist])
 
-  // 像素动画帧计数，每 200ms +1
+  // 像素动画帧计数
   useEffect(() => {
     if (phase !== 'running') return
     const id = setInterval(() => setFrame(f => f + 1), 200)
@@ -494,41 +555,72 @@ export function TaskRunner({
     const s = stateRef.current
     if (s.ended) return
     if (s.paused) {
-      // 继续
+      // 继续：把本次暂停时长累加进 pausedTotal
+      const inPause = (performance.now() - pauseStartedRef.current) / 1000
+      pausedTotalRef.current += inPause
+      s.pausedSecs = historicalPausedRef.current + pausedTotalRef.current
+      s.restSecsLeft = Math.max(0, pauseRestBaseRef.current - inPause)
+      pauseStartedRef.current = 0
       s.paused = false
-      lastTickRef.current = performance.now()
-      rafRef.current = requestAnimationFrame(tick)
     } else {
-      // 暂停
-      s.paused = true
+      // 暂停：记下暂停起点和当前休息预算基准
+      pauseStartedRef.current = performance.now()
+      pauseRestBaseRef.current = s.restSecsLeft
       s.pauseCount += 1
-      cancelAnimationFrame(rafRef.current)
-      rafRef.current = requestAnimationFrame(tick)  // 继续跑怪兽逼近逻辑
+      s.paused = true
     }
     setDisplay({ ...s })
+    persist()
   }
 
   function handleGiveUp() {
     const s = stateRef.current
+    s.workedSecs = computeWorked()
     s.ended = true
-    s.success = false
-    cancelAnimationFrame(rafRef.current)
     setDisplay({ ...s })
     finishRun(s, 'giveup')
   }
 
   function handleFinish() {
     const s = stateRef.current
+    s.workedSecs = computeWorked()
     s.ended = true
-    s.success = true
     s.runnerPct = 96
-    cancelAnimationFrame(rafRef.current)
     setDisplay({ ...s })
-    // 未到预计时间 = 提前完成（early，享受提前加成）；到点或超时 = 正常完成
+    // 未到预计时间 = 提前完成（early）；到点或超时 = 正常完成
     finishRun(s, s.workedSecs >= totalSecs ? 'complete' : 'early')
   }
 
   const workedPct = Math.min(100, (display.workedSecs / totalSecs) * 100)
+
+  // ── Document Picture-in-Picture 悬浮窗 ─────────────────────
+  const [pipWindow, setPipWindow] = useState<Window | null>(null)
+
+  const openPip = useCallback(async () => {
+    // 仅 Chrome/Edge 支持
+    const dpip = (window as any).documentPictureInPicture
+    if (!dpip) {
+      alert('当前浏览器不支持画中画悬浮窗，请使用 Edge 或 Chrome')
+      return
+    }
+    try {
+      const win: Window = await dpip.requestWindow({ width: 280, height: 200 })
+      // 把主文档的样式拷进 PiP 窗口，保证 Tailwind 类生效
+      document.querySelectorAll('style, link[rel="stylesheet"]').forEach(node => {
+        win.document.head.appendChild(node.cloneNode(true))
+      })
+      win.document.body.style.margin = '0'
+      win.addEventListener('pagehide', () => setPipWindow(null))
+      setPipWindow(win)
+    } catch {
+      // 用户取消或失败，静默
+    }
+  }, [])
+
+  // 组件卸载时关闭 PiP
+  useEffect(() => {
+    return () => { try { pipWindow?.close() } catch {} }
+  }, [pipWindow])
 
   if (phase === 'countdown') {
     return <Countdown onDone={() => setPhase('running')} task={task} workMins={workMins} restMins={restMins} isResume={initialWorkedSecs > 0} />
@@ -545,12 +637,46 @@ export function TaskRunner({
         pauseSeconds={Math.round(s.pausedSecs)}
         workedPct={Math.min(100, (s.workedSecs / totalSecs) * 100)}
         scoreBreakdown={scoreBreakdown}
-        onClose={onClose}
+        onClose={() => { clearPersist(); onClose() }}
       />
     )
   }
 
   const overtimeSecs = Math.max(0, Math.round(display.workedSecs - totalSecs))
+
+  // 悬浮窗内容（精简版计时）
+  const pipContent = (
+    <div
+      style={{ fontFamily: 'system-ui, sans-serif' }}
+      className="h-screen w-screen flex flex-col items-center justify-center gap-2 bg-background text-foreground select-none"
+    >
+      <p className="text-[11px] text-muted-foreground truncate max-w-[90%] px-2">{task.content}</p>
+      <p className={cn('text-4xl font-black tabular-nums', display.overtime && 'text-amber-500')}>
+        {fmt(Math.round(display.workedSecs))}
+      </p>
+      <p className={cn('text-[11px]', display.overtime ? 'text-amber-500' : 'text-muted-foreground')}>
+        {display.paused ? `⏸ 暂停 · 休息 ${fmt(Math.round(display.restSecsLeft))}` :
+          display.overtime ? `超出 ${fmt(overtimeSecs)}` : `预计 ${fmt(totalSecs)} · ${workedPct.toFixed(0)}%`}
+      </p>
+      <div className="flex gap-2 mt-1">
+        <button
+          onClick={handlePause}
+          className={cn(
+            'px-3 py-1 rounded-lg text-xs font-semibold',
+            display.paused ? 'bg-primary text-primary-foreground' : 'bg-secondary text-foreground'
+          )}
+        >
+          {display.paused ? '▶ 继续' : '⏸ 暂停'}
+        </button>
+        <button
+          onClick={handleFinish}
+          className="px-3 py-1 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+        >
+          ✅ 完成
+        </button>
+      </div>
+    </div>
+  )
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-background">
@@ -563,18 +689,31 @@ export function TaskRunner({
         </div>
       )}
 
+      {/* PiP 悬浮窗内容（通过 portal 渲染进 PiP 文档） */}
+      {pipWindow && createPortal(pipContent, pipWindow.document.body)}
+
       {/* 顶部信息 */}
       <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-border">
         <div>
           <p className="text-xs text-muted-foreground uppercase tracking-wide">进行中</p>
           <h2 className="text-base font-semibold mt-0.5">{task.content}</h2>
         </div>
-        <div className="text-right">
-          <p className="text-xs text-muted-foreground">已完成</p>
-          <p className={cn(
-            'text-xl font-black tabular-nums',
-            display.overtime ? 'text-amber-500' : 'text-primary'
-          )}>{workedPct.toFixed(0)}%</p>
+        <div className="flex items-center gap-4">
+          {/* 悬浮窗按钮 */}
+          <button
+            onClick={pipWindow ? () => { pipWindow.close(); setPipWindow(null) } : openPip}
+            className="text-xs px-3 py-1.5 rounded-xl border border-border hover:bg-secondary transition-colors text-muted-foreground"
+            title="把计时器变成悬浮小窗，挂在屏幕角落，可一边学习一边看"
+          >
+            {pipWindow ? '⊡ 关闭悬浮' : '⊡ 悬浮窗'}
+          </button>
+          <div className="text-right">
+            <p className="text-xs text-muted-foreground">已完成</p>
+            <p className={cn(
+              'text-xl font-black tabular-nums',
+              display.overtime ? 'text-amber-500' : 'text-primary'
+            )}>{workedPct.toFixed(0)}%</p>
+          </div>
         </div>
       </div>
 
@@ -605,7 +744,7 @@ export function TaskRunner({
           restSecsLeft={display.restSecsLeft}
           totalRestBudget={display.totalRestBudget}
           paused={display.paused}
-          isResting={display.isResting}
+          isResting={false}
           overtime={display.overtime}
           frame={frame}
         />

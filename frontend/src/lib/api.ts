@@ -13,6 +13,30 @@ export interface WinStats {
   by_level: { small: number; medium: number; big: number; future: number }
 }
 
+export type WinnableLevel = 'small' | 'medium' | 'big'
+
+export interface Winnable {
+  id: string
+  content: string
+  win_level: WinnableLevel
+  created_date: string
+  total_wins: number
+  streak: number
+  best_streak: number
+  last_win_date: string | null
+  won_today: boolean
+}
+
+export interface ArchivedWinnable {
+  id: string
+  content: string
+  win_level: WinnableLevel
+  created_date: string
+  archived_date: string
+  total_wins: number
+  best_streak: number
+}
+
 export interface Spinner {
   id: string
   name: string
@@ -164,6 +188,7 @@ export interface DailyTask {
   from_template: boolean
   run_status?: 'none' | 'running_failed' | 'completed' | 'paused'
   count_in_effective: boolean
+  keep?: boolean   // 保留任务：跨天保留，任意时候可执行
 }
 
 export interface BountyBuff {
@@ -225,9 +250,9 @@ export const api = {
     dailyDates: () => get<string[]>('/tasks/daily/dates'),
     daily: (date?: string) => get<DailyTask[]>(`/tasks/daily${date ? `?date=${date}` : ''}`),
     initDaily: () => post<DailyTask[]>('/tasks/daily/init', {}),
-    addDaily: (t: { content: string; hours: number; stars: number; count_in_effective: boolean }) =>
+    addDaily: (t: { content: string; hours: number; stars: number; count_in_effective: boolean; keep: boolean }) =>
       post<DailyTask>('/tasks/daily', t),
-    updateDaily: (id: string, t: { content: string; hours: number; stars: number; count_in_effective: boolean }) =>
+    updateDaily: (id: string, t: { content: string; hours: number; stars: number; count_in_effective: boolean; keep: boolean }) =>
       post<DailyTask>(`/tasks/daily/${id}`, t, 'PUT'),
     toggleDone: (id: string) => post<DailyTask>(`/tasks/daily/${id}/done`, {}, 'PATCH'),
     deleteDaily: (id: string) => del(`/tasks/daily/${id}`),
@@ -319,6 +344,14 @@ export const api = {
       return get<WinStats>(`/wins/stats?${params}`)
     },
     delete: (id: string) => del(`/wins/${id}`),
+    // 可赢目标：挂在页面上的「未来可赢」，点一下赢一次
+    winnables: () => get<Winnable[]>('/wins/winnables'),
+    createWinnable: (content: string, win_level: WinnableLevel) =>
+      post<Winnable>('/wins/winnables', { content, win_level }),
+    winWinnable: (id: string) => post<Winnable>(`/wins/winnables/${id}/win`, {}),
+    archiveWinnable: (id: string) => post<ArchivedWinnable>(`/wins/winnables/${id}/archive`, {}),
+    archivedWinnables: () => get<ArchivedWinnable[]>('/wins/winnables/archived'),
+    deleteWinnable: (id: string) => del(`/wins/winnables/${id}`),
   },
   ai: {
     status: () => get<AIStatus>('/ai/status'),

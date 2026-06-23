@@ -6,7 +6,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
 
 type TaskRun = Awaited<ReturnType<typeof api.tasks.runs>>[number]
 import { cn, gameToday } from '@/lib/utils'
-import { TaskRunner } from '@/components/TaskRunner'
+import { TaskRunner, ACTIVE_RUN_KEY, type ActiveRunSnapshot } from '@/components/TaskRunner'
 import { StudyGoalCard } from '@/components/StudyGoalCard'
 import { playBountyAppear, playClick, playTaskDone } from '@/lib/sounds'
 import { StarWall } from '@/components/StarWall'
@@ -249,11 +249,12 @@ function TaskAnalysisDrawer({ onClose }: { onClose: () => void }) {
 }
 
 // ── 快速添加 ──────────────────────────────────────────────────
-function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; stars: number; count_in_effective: boolean }) => Promise<void> }) {
+function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; stars: number; count_in_effective: boolean; keep: boolean }) => Promise<void> }) {
   const [content, setContent]                 = useState('')
   const [hours, setHours]                     = useState(1)
   const [stars, setStars]                     = useState(3)
   const [countInEffective, setCountInEffective] = useState(true)
+  const [keep, setKeep]                       = useState(false)
   const [adding, setAdding]                   = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -262,7 +263,7 @@ function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; star
     if (!trimmed || adding) return
     setAdding(true)
     try {
-      await onAdd({ content: trimmed, hours, stars, count_in_effective: countInEffective })
+      await onAdd({ content: trimmed, hours, stars, count_in_effective: countInEffective, keep })
       setContent('')
       inputRef.current?.focus()
     } finally {
@@ -312,6 +313,15 @@ function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; star
         <label className="flex items-center gap-1.5 cursor-pointer select-none ml-auto">
           <input
             type="checkbox"
+            checked={keep}
+            onChange={e => setKeep(e.target.checked)}
+            className="h-3.5 w-3.5 rounded accent-sky-500"
+          />
+          <span className="text-xs text-muted-foreground">保留任务（跨天不消失）</span>
+        </label>
+        <label className="flex items-center gap-1.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
             checked={!countInEffective}
             onChange={e => setCountInEffective(!e.target.checked)}
             className="h-3.5 w-3.5 rounded accent-muted-foreground"
@@ -328,7 +338,7 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
   task: DailyTask
   onToggle: () => void
   onDelete: () => void
-  onUpdate: (t: { content: string; hours: number; stars: number; count_in_effective: boolean }) => void
+  onUpdate: (t: { content: string; hours: number; stars: number; count_in_effective: boolean; keep: boolean }) => void
   onStart: () => void
   readOnly?: boolean
   completePct?: number   // 失败/中断时的完成百分比（0-99）
@@ -340,6 +350,7 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
     hours: task.hours,
     stars: task.stars,
     count_in_effective: task.count_in_effective ?? true,
+    keep: task.keep ?? false,
   })
 
   function save() {
@@ -369,6 +380,15 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
             <span className="text-xs">h</span>
           </div>
           <StarPicker value={draft.stars} onChange={s => setDraft(d => ({ ...d, stars: s }))} />
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={draft.keep}
+              onChange={e => setDraft(d => ({ ...d, keep: e.target.checked }))}
+              className="h-3.5 w-3.5 rounded accent-sky-500"
+            />
+            <span className="text-xs text-muted-foreground">保留任务</span>
+          </label>
           <label className="flex items-center gap-1.5 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -442,6 +462,11 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
           {isPaused && !isComplete && (
             <span className="text-[10px] text-amber-600 font-medium">
               {completePct != null ? `${completePct}% · ` : ''}已暂停 · 点击继续
+            </span>
+          )}
+          {task.keep && (
+            <span className="text-[10px] text-sky-600 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-md">
+              保留
             </span>
           )}
           {!(task.count_in_effective ?? true) && (
@@ -961,6 +986,61 @@ function WorkRestModal({
   )
 }
 
+// ── 关窗恢复询问弹窗 ──────────────────────────────────────────
+// ≤10 分钟内重开 app 时弹出，问是否继续上次未结束的计时
+function ResumeRunDialog({
+  snap,
+  onResume,
+  onGiveUp,
+}: {
+  snap: ActiveRunSnapshot
+  onResume: () => void
+  onGiveUp: () => void
+}) {
+  const workedMin = Math.floor(snap.workedSecs / 60)
+  const workedSec = Math.round(snap.workedSecs % 60)
+  const idleMin = Math.max(0, Math.round((Date.now() - new Date(snap.savedAtISO).getTime()) / 60000))
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+      <div className="absolute inset-0 bg-foreground/25 backdrop-blur-sm" />
+      <div className="relative z-10 w-80 bg-card rounded-3xl border border-border shadow-2xl overflow-hidden">
+        <div className="h-1.5 bg-gradient-to-r from-amber-300 to-orange-400" />
+        <div className="p-6 space-y-4 text-center">
+          <div className="text-4xl">⏱</div>
+          <div>
+            <h2 className="text-lg font-bold">有一个未结束的计时</h2>
+            <p className="text-sm text-muted-foreground mt-1">{snap.task.content}</p>
+          </div>
+          <div className="rounded-2xl bg-secondary/60 px-4 py-3 text-sm space-y-1">
+            <p>已计时 <span className="font-bold tabular-nums">{workedMin}:{workedSec.toString().padStart(2, '0')}</span></p>
+            <p className="text-[11px] text-muted-foreground">{idleMin} 分钟前离开 · 是否继续？</p>
+          </div>
+          <div className="flex gap-3 pt-1">
+            <button onClick={onGiveUp}
+              className="flex-1 h-10 rounded-2xl border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">
+              算中断
+            </button>
+            <button onClick={onResume}
+              className="flex-1 h-10 rounded-2xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors">
+              继续任务
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// 关窗恢复：传给 TaskRunner 让计时无缝续上的参数
+interface ResumeParams {
+  initialWorkedSecs: number
+  initialRestSecsLeft: number
+  resumeStartedAtISO: string
+  resumePausedTotal: number
+  resumePauseCount: number
+}
+
 // ── 主页面 ────────────────────────────────────────────────────
 export function Tasks() {
   const todayStr = gameToday()
@@ -987,6 +1067,10 @@ export function Tasks() {
   const [archivedList, setArchivedList]               = useState<ArchivedRoutine[]>([])
   const [studyRefreshKey, setStudyRefreshKey] = useState(0)
   const [runnerInitSecs, setRunnerInitSecs] = useState(0)
+  // 关窗恢复：进行中计时的恢复参数（从 localStorage 读出，>0 表示要续传）
+  const [resumeRun, setResumeRun] = useState<ResumeParams | null>(null)
+  // 关窗恢复询问弹窗（≤10 分钟内重开时弹出）
+  const [resumePrompt, setResumePrompt] = useState<ActiveRunSnapshot | null>(null)
   // 本次会话已经弹出过的赏金任务 id，避免重复弹
   const shownBountyIds = useRef<Set<string>>(new Set())
 
@@ -1027,6 +1111,45 @@ export function Tasks() {
     })()
   }, [selectedDate])
 
+  // 关窗恢复：挂载时检查 localStorage 里有没有未结束的计时
+  // ≤10 分钟内重开 → 弹窗问是否继续；超时 → 直接按中断保存记录
+  useEffect(() => {
+    let snap: ActiveRunSnapshot | null = null
+    try {
+      const raw = localStorage.getItem(ACTIVE_RUN_KEY)
+      if (raw) snap = JSON.parse(raw) as ActiveRunSnapshot
+    } catch { snap = null }
+    if (!snap) return
+
+    const idleMs = Date.now() - new Date(snap.savedAtISO).getTime()
+    const TEN_MIN = 10 * 60 * 1000
+
+    if (idleMs <= TEN_MIN && idleMs >= 0) {
+      // 短时间内重开：询问是否继续
+      setResumePrompt(snap)
+    } else {
+      // 超时（或时间异常）：直接按中断保存，进时间轴/列表，可重试
+      const today = gameToday()
+      api.tasks.saveRun({
+        task_id: snap.task.id,
+        task_content: snap.task.content,
+        date: today,
+        success: false,
+        started_at: snap.startedAtISO,
+        ended_at: snap.savedAtISO,
+        actual_seconds: Math.round(snap.workedSecs),
+        pause_count: snap.pauseCount,
+        pause_seconds: Math.round(snap.totalRestBudget - snap.restSecsLeft),
+        task_hours: snap.task.hours,
+        task_stars: snap.task.stars,
+        end_reason: 'giveup',
+        rest_remaining_secs: Math.round(snap.restSecsLeft),
+        multiplier: snap.multiplier,
+      }).catch(() => {}).finally(() => reload(gameToday()))
+      try { localStorage.removeItem(ACTIVE_RUN_KEY) } catch {}
+    }
+  }, [])  // 仅挂载时执行一次
+
   // 轮询：每 60 秒检查是否有到时间的赏金任务需要弹出
   useEffect(() => {
     if (!isToday) return
@@ -1051,7 +1174,7 @@ export function Tasks() {
     return () => clearInterval(id)
   }, [isToday])
 
-  async function handleAdd(t: { content: string; hours: number; stars: number; count_in_effective: boolean }) {
+  async function handleAdd(t: { content: string; hours: number; stars: number; count_in_effective: boolean; keep: boolean }) {
     await api.tasks.addDaily(t)
     reload(selectedDate)
     api.tasks.dailyDates().then(d => setDatesWithTasks(new Set(d))).catch(() => {})
@@ -1063,7 +1186,7 @@ export function Tasks() {
     setStudyRefreshKey(k => k + 1)
   }
   async function handleDelete(id: string) { await api.tasks.deleteDaily(id); reload(selectedDate) }
-  async function handleUpdate(id: string, t: { content: string; hours: number; stars: number; count_in_effective: boolean }) {
+  async function handleUpdate(id: string, t: { content: string; hours: number; stars: number; count_in_effective: boolean; keep: boolean }) {
     await api.tasks.updateDaily(id, t); reload(selectedDate)
   }
   async function handleBountyAccept(id: string) {
@@ -1335,15 +1458,60 @@ export function Tasks() {
 
       </div>
 
+      {/* 关窗恢复询问弹窗（≤10 分钟内重开） */}
+      {resumePrompt && (
+        <ResumeRunDialog
+          snap={resumePrompt}
+          onResume={() => {
+            const snap = resumePrompt
+            setResumeRun({
+              initialWorkedSecs: Math.round(snap.workedSecs),
+              initialRestSecsLeft: Math.round(snap.restSecsLeft),
+              resumeStartedAtISO: snap.startedAtISO,
+              resumePausedTotal: snap.pausedTotal,
+              resumePauseCount: snap.pauseCount,
+            })
+            setRunningTask(snap.task)
+            setResumePrompt(null)
+          }}
+          onGiveUp={() => {
+            const snap = resumePrompt
+            const today = gameToday()
+            api.tasks.saveRun({
+              task_id: snap.task.id,
+              task_content: snap.task.content,
+              date: today,
+              success: false,
+              started_at: snap.startedAtISO,
+              ended_at: new Date().toISOString(),
+              actual_seconds: Math.round(snap.workedSecs),
+              pause_count: snap.pauseCount,
+              pause_seconds: Math.round(snap.totalRestBudget - snap.restSecsLeft),
+              task_hours: snap.task.hours,
+              task_stars: snap.task.stars,
+              end_reason: 'giveup',
+              rest_remaining_secs: Math.round(snap.restSecsLeft),
+              multiplier: snap.multiplier,
+            }).catch(() => {}).finally(() => reload(gameToday()))
+            try { localStorage.removeItem(ACTIVE_RUN_KEY) } catch {}
+            setResumePrompt(null)
+          }}
+        />
+      )}
+
       {/* 任务运行器 */}
       {runningTask && (
         <TaskRunner
           task={runningTask}
-          onClose={() => { setRunningTask(null); setRunnerInitSecs(0); reload(selectedDate) }}
+          onClose={() => { setRunningTask(null); setRunnerInitSecs(0); setResumeRun(null); reload(selectedDate) }}
           workMins={workRestCfg.work_mins}
           restMins={workRestCfg.rest_mins}
           multiplier={multiplier}
-          initialWorkedSecs={runnerInitSecs}
+          initialWorkedSecs={resumeRun?.initialWorkedSecs ?? runnerInitSecs}
+          initialRestSecsLeft={resumeRun?.initialRestSecsLeft}
+          resumeStartedAtISO={resumeRun?.resumeStartedAtISO}
+          resumePausedTotal={resumeRun?.resumePausedTotal}
+          resumePauseCount={resumeRun?.resumePauseCount}
         />
       )}
 

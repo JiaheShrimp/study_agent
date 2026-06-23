@@ -14,6 +14,7 @@
 
 import json
 import os
+import random
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -24,6 +25,11 @@ DATA_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "ai_dialogue.j
 MAX_TURNS = 500
 
 Role = Literal["user", "assistant"]
+
+
+def _game_today() -> str:
+    """游戏日以零点为起点，与自然日对齐（与其余模块一致）。"""
+    return str(datetime.now().date())
 
 
 def _ensure_file() -> None:
@@ -66,6 +72,40 @@ def append_turn(role: Role, content: str, trigger: str = "") -> dict[str, Any]:
     return turn
 
 
+def _turn_day(turn: dict[str, Any]) -> str:
+    """取某条对话所属的游戏日（YYYY-MM-DD）。"""
+    return str(turn.get("at", ""))[:10]
+
+
+def today_turns() -> list[dict[str, Any]]:
+    """今天（游戏日）的对话，时间升序。
+
+    聊天栏只呈现今天的内容——按天清零；过去的记录仍保留在文件里，只是不展示。
+    """
+    today = _game_today()
+    return [t for t in load_dialogue() if _turn_day(t) == today]
+
+
+def memory_turns(today_limit: int = 16, past_sample: int = 6) -> list[dict[str, Any]]:
+    """拼进 prompt 当「记忆」的对话，时间升序。
+
+    = 今天最近若干条（保证连续感、避免今天内重复）
+      + 从更早的历史里随机抽样若干条（当学习语料，让回复更人性化；
+        是否提及过去的事交给随机，不强求）。
+    抽样的旧对话按时间插在今天对话之前，整体仍时间升序。
+    """
+    items = load_dialogue()
+    today = _game_today()
+    today_part = [t for t in items if _turn_day(t) == today][-today_limit:]
+    past = [t for t in items if _turn_day(t) != today]
+    if past_sample > 0 and len(past) > past_sample:
+        sampled = random.sample(past, past_sample)
+        sampled.sort(key=lambda t: t.get("at", ""))
+    else:
+        sampled = past
+    return sampled + today_part
+
+
 def recent_turns(limit: int = 16) -> list[dict[str, Any]]:
-    """最近 N 条对话，时间升序（用于拼进 prompt 当记忆）。"""
+    """最近 N 条对话，时间升序（兼容旧调用；新逻辑请用 memory_turns）。"""
     return load_dialogue()[-limit:]

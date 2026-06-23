@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { ChevronLeft, ChevronRight, BarChart2, X, Trash2, Plus, Bell, BellOff } from 'lucide-react'
+import { ChevronLeft, ChevronRight, BarChart2, X, Trash2, Plus, Bell, BellOff, Flame, Trophy, PartyPopper } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { api, type Win, type WinStats, type ReminderConfig } from '@/lib/api'
+import { api, type Win, type WinStats, type ReminderConfig, type Winnable, type ArchivedWinnable } from '@/lib/api'
 import { cn, gameToday } from '@/lib/utils'
 import { playWinRecord, playClick } from '@/lib/sounds'
 
@@ -40,9 +40,14 @@ export function Wins() {
   const days  = daysInMonth(year, month)
   const pad   = firstWeekday(year, month)
 
+  const [winnableTick, setWinnableTick] = useState(0)
+
   const reload = useCallback(() => {
     api.wins.byDate().then(setByDate).catch(() => {})
   }, [])
+
+  // 让可赢目标卡片重新拉取（QuickAdd 记一条未来可赢后调用）
+  const reloadWinnables = useCallback(() => setWinnableTick(t => t + 1), [])
 
   useEffect(() => { reload() }, [reload])
 
@@ -159,6 +164,9 @@ export function Wins() {
           </div>
         </div>
 
+        {/* 可赢目标 */}
+        <WinnableSection onWin={reload} refreshTick={winnableTick} />
+
         {/* 当日记录卡片 */}
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-5 pt-5 pb-3">
@@ -200,7 +208,7 @@ export function Wins() {
         </div>
 
         {/* 快速添加区 */}
-        <QuickAdd onAdded={reload} />
+        <QuickAdd onAdded={reload} onWinnableAdded={reloadWinnables} />
 
       </div>
 
@@ -213,12 +221,188 @@ export function Wins() {
   )
 }
 
+// ── 可赢目标 ─────────────────────────────────────────────────
+// 挂在页面上的「未来可赢」。点「赢一次」→ 累计天数/次数 + 复制进当日赢记录；
+// 点「赢太多了」→ 归档进历史。靛蓝（indigo）主题，与未来可赢一致。
+
+function WinnableSection({ onWin, refreshTick }: { onWin: () => void; refreshTick: number }) {
+  const [items, setItems]   = useState<Winnable[]>([])
+  const [busyId, setBusyId]   = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+
+  const reload = useCallback(() => {
+    api.wins.winnables().then(setItems).catch(() => {})
+  }, [])
+
+  useEffect(() => { reload() }, [reload])
+  // 下面输入框记一条未来可赢后，refreshTick 变化 → 重新拉取列表
+  useEffect(() => { if (refreshTick > 0) reload() }, [refreshTick, reload])
+
+  async function win(w: Winnable) {
+    if (busyId) return
+    setBusyId(w.id)
+    try {
+      await api.wins.winWinnable(w.id)
+      playWinRecord(w.win_level)
+      // 通知搭子聊天栏：又赢了一次，尽快刷新拉取搭子反馈
+      window.dispatchEvent(new CustomEvent('agent:dialogue-refresh'))
+      reload()
+      onWin()   // 当日赢记录里多了一条，刷新日历/今日列表
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function archive(id: string) {
+    if (busyId) return
+    setBusyId(id)
+    try {
+      await api.wins.archiveWinnable(id)
+      playClick()
+      reload()
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <div className="bg-card rounded-2xl border border-border shadow-sm p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <span className="text-sm font-medium flex items-center gap-1.5">
+            <span className="text-indigo-400">◇</span> 可赢目标
+          </span>
+          <p className="text-[11px] text-muted-foreground/70 mt-0.5">每天点「赢一次」积累连续与次数，赢的内容会进当日记录</p>
+        </div>
+        <button
+          onClick={() => { playClick(); setHistoryOpen(true) }}
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          历史
+        </button>
+      </div>
+
+      {/* 列表 */}
+      {items.length > 0 && (
+        <ul className="space-y-2">
+          {items.map(w => (
+            <li
+              key={w.id}
+              className="flex items-center gap-3 rounded-xl border border-indigo-200/60 bg-indigo-50/40 px-3.5 py-2.5"
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0', LEVEL_MAP[w.win_level].cls)}>
+                    {LEVEL_MAP[w.win_level].short}
+                  </span>
+                  <p className="text-sm leading-snug truncate">{w.content}</p>
+                </div>
+                <div className="flex items-center gap-3 mt-1 text-[11px] text-muted-foreground">
+                  <span className={cn('flex items-center gap-0.5', w.streak > 0 && 'text-orange-500')}>
+                    <Flame className="h-3 w-3" /> 连续 {w.streak} 天
+                  </span>
+                  <span className="flex items-center gap-0.5">
+                    <Trophy className="h-3 w-3" /> 累计赢 {w.total_wins} 次
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => win(w)}
+                disabled={!!busyId}
+                className={cn(
+                  'shrink-0 text-xs font-medium rounded-lg px-3 py-1.5 transition-all',
+                  w.won_today
+                    ? 'bg-indigo-100 text-indigo-600 hover:bg-indigo-200'
+                    : 'bg-indigo-500 text-white hover:bg-indigo-600 shadow-sm',
+                  busyId && 'opacity-50 cursor-not-allowed'
+                )}
+                title={w.won_today ? '今天已赢，再点也会累计次数' : '赢一次'}
+              >
+                {w.won_today ? '✓ 今天赢过' : '赢一次'}
+              </button>
+              <button
+                onClick={() => archive(w.id)}
+                disabled={!!busyId}
+                className="shrink-0 flex items-center gap-1 text-[11px] text-muted-foreground hover:text-indigo-600 transition-colors disabled:opacity-50"
+                title="赢太多了，归档进历史"
+              >
+                <PartyPopper className="h-3.5 w-3.5" />
+                赢太多了
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* 空状态：引导去下面的输入框记一条未来可赢 */}
+      {items.length === 0 && (
+        <p className="text-xs text-muted-foreground/70 rounded-xl border border-dashed border-border/80 px-4 py-3 text-center">
+          在下面「记录未来可赢」里写一条，就会挂到这里 ↓
+        </p>
+      )}
+
+      {historyOpen && <WinnableHistory onClose={() => setHistoryOpen(false)} />}
+    </div>
+  )
+}
+
+function WinnableHistory({ onClose }: { onClose: () => void }) {
+  const [items, setItems] = useState<ArchivedWinnable[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.wins.archivedWinnables().then(setItems).finally(() => setLoading(false))
+  }, [])
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-foreground/10 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-xs bg-card border-l border-border shadow-2xl flex flex-col h-full overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <span className="text-sm font-semibold">赢太多了 · 历史</span>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          {loading ? (
+            <p className="text-xs text-muted-foreground text-center py-8">加载中…</p>
+          ) : items.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-8">还没有归档的可赢目标</p>
+          ) : (
+            items.map(w => (
+              <div key={w.id} className="rounded-xl border border-border bg-secondary/40 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0', LEVEL_MAP[w.win_level].cls)}>
+                    {LEVEL_MAP[w.win_level].short}
+                  </span>
+                  <p className="text-sm leading-snug">{w.content}</p>
+                </div>
+                <div className="flex items-center gap-3 mt-1.5 text-[11px] text-muted-foreground">
+                  <span className="flex items-center gap-0.5"><Trophy className="h-3 w-3" /> 累计赢 {w.total_wins} 次</span>
+                  <span className="flex items-center gap-0.5"><Flame className="h-3 w-3" /> 最长连续 {w.best_streak} 天</span>
+                </div>
+                <p className="text-[10px] text-muted-foreground/60 mt-1">{w.archived_date} 归档</p>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── 快速添加 ─────────────────────────────────────────────────
 // 交互：输入内容 → 选级别（点击三个按钮之一）→ 回车/点击保存 → 自动清空，光标留在输入框继续下一条
+// 特例：选「未来可赢」时不直接写当日记录，而是挂成一个「可赢目标」（上方卡片）。
+//      之后每点一次「赢一次」才把内容写进当日赢记录。
 
-function QuickAdd({ onAdded }: { onAdded: () => void }) {
+function QuickAdd({ onAdded, onWinnableAdded }: { onAdded: () => void; onWinnableAdded: () => void }) {
   const [content, setContent] = useState('')
   const [level, setLevel]     = useState<Win['win_level']>('small')
+  // 选「未来可赢」时，挂成可赢目标用的星级（之后每次「赢一次」按此等级记当日记录）
+  const [winnableLevel, setWinnableLevel] = useState<'small' | 'medium' | 'big'>('small')
   const [saving, setSaving]   = useState(false)
   const [flash, setFlash]     = useState<string | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -228,15 +412,26 @@ function QuickAdd({ onAdded }: { onAdded: () => void }) {
     if (!trimmed || saving) return
     setSaving(true)
     try {
-      await api.wins.create(trimmed, level)
-      playWinRecord(level)
-      // 通知搭子聊天栏：记了一条赢，尽快刷新拉取搭子反馈
-      window.dispatchEvent(new CustomEvent('agent:dialogue-refresh'))
-      setContent('')
-      setFlash(LEVEL_MAP[level].label)
-      setTimeout(() => setFlash(null), 1500)
-      onAdded()
-      inputRef.current?.focus()
+      if (level === 'future') {
+        // 未来可赢 → 挂成可赢目标（带星级），不直接写当日记录
+        await api.wins.createWinnable(trimmed, winnableLevel)
+        playWinRecord(winnableLevel)
+        setContent('')
+        setFlash(`已挂上可赢目标（${LEVEL_MAP[winnableLevel].label}）`)
+        setTimeout(() => setFlash(null), 1500)
+        onWinnableAdded()
+        inputRef.current?.focus()
+      } else {
+        await api.wins.create(trimmed, level)
+        playWinRecord(level)
+        // 通知搭子聊天栏：记了一条赢，尽快刷新拉取搭子反馈
+        window.dispatchEvent(new CustomEvent('agent:dialogue-refresh'))
+        setContent('')
+        setFlash(`已记录${LEVEL_MAP[level].label}`)
+        setTimeout(() => setFlash(null), 1500)
+        onAdded()
+        inputRef.current?.focus()
+      }
     } finally {
       setSaving(false)
     }
@@ -256,12 +451,12 @@ function QuickAdd({ onAdded }: { onAdded: () => void }) {
         <span className="text-sm font-medium">{level === 'future' ? '记录未来可赢' : '记录今天的赢'}</span>
         {flash && (
           <span className="text-xs text-muted-foreground animate-pulse">
-            ✓ 已记录{flash}
+            ✓ {flash}
           </span>
         )}
       </div>
 
-      {/* 星级选择 — 横排三个 chip */}
+      {/* 星级选择 — 横排四个 chip */}
       <div className="flex gap-2">
         {LEVELS.map(l => (
           <button
@@ -278,6 +473,27 @@ function QuickAdd({ onAdded }: { onAdded: () => void }) {
           </button>
         ))}
       </div>
+
+      {/* 未来可赢：选「赢一次」时计入当日记录的星级 */}
+      {level === 'future' && (
+        <div className="flex items-center gap-2 rounded-xl bg-indigo-50/40 border border-indigo-200/60 px-3 py-2">
+          <span className="text-[11px] text-muted-foreground shrink-0">赢一次算</span>
+          {LEVELS.filter(l => l.value !== 'future').map(l => (
+            <button
+              key={l.value}
+              onClick={() => setWinnableLevel(l.value as 'small' | 'medium' | 'big')}
+              className={cn(
+                'flex-1 text-xs py-1 rounded-lg border font-medium transition-all',
+                winnableLevel === l.value
+                  ? cn(l.cls, 'shadow-sm scale-[1.02]')
+                  : 'border-border text-muted-foreground hover:bg-secondary'
+              )}
+            >
+              {l.short} {l.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* 输入框 */}
       <div className="relative">

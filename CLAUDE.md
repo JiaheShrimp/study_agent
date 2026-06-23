@@ -71,7 +71,7 @@ agent/
 │   │   │   ├── layout/      # AppLayout（含今日倍数条）, Sidebar, BottomNav
 │   │   │   ├── ui/          # Button, Card, Dialog, Select
 │   │   │   ├── SlotMachine.tsx    # 每日抽奖老虎机弹窗
-│   │   │   ├── TaskRunner.tsx     # 任务追逐计时器（全屏，像素风跑道）
+│   │   │   ├── TaskRunner.tsx     # 任务追逐计时器（时间戳计时 + 圆形跑道 + PiP 悬浮窗 + localStorage 关窗恢复）
 │   │   │   ├── DayTimeline.tsx    # 今日时间轴（Dashboard 展示，竖排）
 │   │   │   └── StudyGoalCard.tsx  # 有效学习时间 + 爬坡目标卡片（compact / 详细）
 │   │   └── pages/
@@ -126,8 +126,9 @@ npm run dev
 | 执行来源 | `source` | `runner`=倒计时完成 / `manual`=直接勾选完成 / `routine`=常规任务打卡 |
 | 计入有效时间 | `count_in_effective` | 任务及对应 task_run 上的布尔字段；`false` 时不计入有效学习时间统计，时间轴仍显示 |
 | 任务结果 | `run_status` | `none` / `running_failed` / `completed` |
-| 工作段 | work block | 可配置的专注时长（默认 30 分钟） |
-| 休息预算 | rest budget | 总额 = 按预计时长换算（`预计时长 / work_mins × rest_mins`），开局一次性给满；暂停时消耗，耗尽则失败；以剩余时间（mm:ss）显示。例：1h 任务、每 30min 休息 5min → 10 分钟 |
+| 工作段 | work block | 配置项，用于换算休息预算总额（默认 30 分钟）；计时本身不再分段 |
+| 休息预算 | rest budget | 总额 = 按预计时长换算（`预计时长 / work_mins × rest_mins`），开局一次性给满；**仅在用户手动点暂停时消耗**（与窗口前后台无关），耗尽则失败；以剩余时间（mm:ss）显示。例：1h 任务、每 30min 休息 5min → 10 分钟 |
+| 进行中快照 | `ActiveRunSnapshot` | 计时进行中实时写入 localStorage（`agent.activeRun`）的进度，用于关窗后恢复或判中断 |
 | 结束原因 | `end_reason` | `complete`=跑到终点 / `early`=提前完成 / `giveup`=中断 / `failed`=力竭倒下 |
 | 有效学习时间 | effective time | 实际口径（actual_seconds）或计划口径（min(actual, task_hours×3600)） |
 | 排除日 | excluded date | 手动标记不计入目标计算的日期，需填写理由 |
@@ -157,6 +158,16 @@ npm run dev
 - 分析抽屉：等级分布中 small/medium/big 按比例展示，future 单独列于分隔线下方
 - 记录成功时有音效，星级越高音符越多越响亮
 
+### 可赢目标（已实现）
+- 挂在赢麻了页面的「未来可赢」，类似常规任务但更轻：靛蓝（indigo）主题，存 `winnables.json`
+- **入口复用「记录未来可赢」输入框**：QuickAdd 选「未来可赢」等级记一条时，**不直接写当日赢记录**，而是调 `createWinnable` 挂成一个可赢目标（出现在上方卡片）。可赢目标卡片**没有自己的输入框**，靠 `refreshTick` 在 QuickAdd 记录后重新拉列表；空状态提示去下面输入框写
+- **可赢目标自带星级**（`win_level`：small/medium/big，不含 future）：选「未来可赢」chip 时，下方出现「赢一次算 ★/★★/★★★」二级选择器，挂目标时选定一次，之后固定。卡片左侧显示对应星级 badge
+- 每条展示：星级 badge + 连续赢天数（🔥 streak）+ 累计赢次数（🏆 total_wins）
+- **赢一次**：点一下 → `total_wins +1`，当天写入 `win_days`（同一天多点只计一次连续，但 total_wins 照常累加）→ **此时**才复制内容进**当日赢记录**，**按目标设定的星级**（如 medium=2 星，不再固定 future/0 星）；赢 N 次点 N 次，当日记录就多 N 条。刷新日历/今日列表 + 播 `playWinRecord(win_level)` + 派发 `agent:dialogue-refresh`
+- **连续天数**：`win_days` 日期集合全量重算（`_recalc_streak`，类似常规任务），最近一次赢是今天或昨天才算「仍在连续」，否则归零；同时算历史最长 `best_streak`
+- **赢太多了**：点一下 → `archived=True` + `archived_date`，该项从页面消失，进入「历史」抽屉（展示累计次数 + 最长连续 + 归档日期）
+- 接口：`GET/POST /wins/winnables`、`POST /wins/winnables/{id}/win`、`POST /wins/winnables/{id}/archive`、`GET /wins/winnables/archived`、`DELETE /wins/winnables/{id}`
+
 ### 每日任务（已实现）
 - 任务模板库 → 每天自动复制为当日任务
 - 快速添加：Enter / 空格 即保存，光标留在输入框
@@ -165,6 +176,7 @@ npm run dev
 - 失败/中断任务显示完成百分比，可直接点 ▶ 重试，成功任务不能再启动
 - **直接勾选完成**：不经过计时器直接打勾，写入 `source=manual` 的 task_run；`count_in_effective=true`（默认）时计入有效学习时间，`false` 时只在时间轴展示不计时，得分为 0；取消勾选则删除该记录
 - **不计入学习时间**：添加/编辑任务时可勾选「不计入学习时间」（`count_in_effective` 字段）；对应 task_run 同步写入该字段，时间轴标注「不计时」灰色小字，底部累计专注时间不包含此类记录
+- **保留任务（跨天不消失）**：添加/编辑任务时可勾选「保留任务」（`keep` 字段，sky 蓝主题，列表显示「保留」badge）。未必今天完成、以后某天再做的任务——不会随当天过去而刷新消失。`init_daily_tasks` 每次（今天首开）调 `_migrate_kept_tasks`：扫描所有早于今天的日期，把其中**未完成**（done/completed 之外）的保留任务从原日期移除、合并进今天列表（保留原 id / 进度 / run_status，paused 也带过来）。已完成的保留任务留在原日期不迁。计算/显示/计时与普通任务**完全一致**（它在今天列表里就是个普通 DailyTask）
 - **历史回溯**：Tasks 页顶部月历切换日期，历史日任务只读（不可编辑/添加/启动）
 
 ### 常规任务（已实现）
@@ -185,11 +197,14 @@ npm run dev
 
 ### 任务追踪（已实现）
 - hover 任务 → ▶ 开始 → 3-2-1 倒计时（显示任务时长 + 总休息预算）→ 全屏追逐跑道
-- **主计时器正计时**：从 0 开始累加「已用时间」（`workedSecs`），不是倒计时；进度环 = `已用 / 预计`，封顶 100%
+- **计时基于时间戳算差值，不靠 requestAnimationFrame 累加**：已工作时长 = `performance.now() 流逝 − 暂停时长`，`setInterval(250ms)` 仅负责刷新显示。这样**窗口缩小 / 被别的程序盖住 / 切标签页都照常走表**（旧的 rAF 累加方案在后台标签页会被浏览器挂起，导致计时停住——已废弃）
+- **主计时器正计时**：从 0 开始算「已用时间」（`workedSecs`），不是倒计时；进度环 = `已用 / 预计`，封顶 100%
 - **到达预计时间不结束**：`workedSecs ≥ totalSecs` 时触发到点提示（橙色横幅 + `playGoalReached()` 音效，`reachedRef` 防重复），**继续计时**进入超时态（`overtime=true`），等用户自己点「完成任务」才结束
 - **超时态视觉**：主时间数字 / 已完成% / 进度环 / 中央状态文字均变琥珀色，副标题显示「超出预计 mm:ss」
 - **圆形跑道**：小人沿圆环奔跑，进度对应圆弧角度，帧动画切换 emoji；超时后小人停在终点（runnerPct 封顶 92）
-- 暂停时：消耗休息预算（右下角 mm:ss 倒计时，不足 60s 变红）
+- **暂停 = 用户手动点，与窗口前后台无关**：只有手动点「暂停」才消耗休息预算（右下角 mm:ss，不足 60s 变红）。缩小页面去做学习任务**不算暂停、不扣预算、不判失败**——计时引擎不再把「页面不在前台」当成偷懒
+- **悬浮窗（Document Picture-in-Picture）**：计时页「⊡ 悬浮窗」按钮把计时器弹成 280×200 小窗，浮在所有程序之上、跟随屏幕；内含时间/进度/暂停/完成。仅 Chrome/Edge 支持（不支持时 alert 提示）。用 `createPortal` 把精简版计时 UI 渲染进 PiP 文档，并克隆主文档样式表保证 Tailwind 生效
+- **关窗恢复**：计时进行中实时把进度快照（`ActiveRunSnapshot`）写入 `localStorage`（key=`agent.activeRun`）。下次打开 Tasks 页检查未结束计时：**≤10 分钟**前离开 → 弹 `ResumeRunDialog` 问「是否继续」（继续=无缝续传，算中断=按 giveup 记录）；**>10 分钟** → 直接按中断保存。计时正常结束/中断/力竭时清除快照
 - **工作/休息可配置**：Tasks 页顶部计时器按钮打开设置，`work_mins` / `rest_mins` 存 config.json
 - 休息预算耗尽 → 失败（力竭）；完成按钮：未到预计时间点 = 提前完成（`early`，享加成），到点或超时点 = 正常完成（`complete`）；可随时「中断任务」
 - 结果页区分 4 种结局：🏆 完成 / ⚡ 提前完成 / 🚩 中断（显示完成%）/ 💀 力竭倒下
@@ -324,6 +339,10 @@ backend/data/*.json
 - **常规任务时间轴**：`source=routine` 的记录现在出现在时间轴；`hours=0` 的常规任务不写 task_run（不在时间轴显示）
 - **任务状态**：`run_status` 字段存在 daily_tasks，区分 none/running_failed/completed；失败不删任务，可重试
 - **任务结束统一入口**：所有结束路径（完成/提前/中断/失败）均通过 `finishRun(s, reason)` 处理
+- **计时用时间戳算差值**：`computeWorked()` = `initProgress + (performance.now() − startMono)/1000 − pausedTotal − 本次暂停时长`；用 `performance.now()`（单调时钟）而非 `Date.now()`，避免系统改时间跳变。`setInterval(250ms)` 只刷新显示，不参与计时——所以窗口缩小/后台都准。**不再有 rAF 累加、不再有自动休息段（auto-rest）、不再有工作段循环（workSecsLeft）**
+- **暂停统计分两份**：`pausedTotalRef`=本会话新增暂停秒（续传时从 0 起，因为 `initProgress` 已扣除续传前暂停，避免双重扣减）；`historicalPausedRef`=续传前累计暂停秒（仅用于显示总暂停时长）。两者相加才是展示用的 `pausedSecs`
+- **PiP 悬浮窗**：`documentPictureInPicture.requestWindow()` 开小窗，`createPortal` 把精简计时 UI 渲染进 `pipWindow.document.body`，并克隆主文档 `<style>/<link rel=stylesheet>` 到 PiP head 保证 Tailwind 生效；不支持时 alert 提示，组件卸载时关闭 PiP
+- **关窗恢复（10 分钟规则）**：`persist()` 每 tick 把 `ActiveRunSnapshot` 写 localStorage（含 `workedSecs/restSecsLeft/pausedTotal/startedAtISO/savedAtISO`），`finishRun` 清除。Tasks 页挂载 effect 读快照：`Date.now() − savedAtISO ≤ 10min` → 弹 `ResumeRunDialog`（继续=把 `workedSecs/restSecsLeft/pausedTotal` 作为 resume props 传回 TaskRunner 无缝续传；中断=按 giveup 存 run）；超时 → 直接按 giveup 存 run（`actual_seconds=snap.workedSecs`）。saveRun 的 `actual_seconds` 存**总**已工作秒数（含续传进度），便于中断后续传
 - **爬坡目标结算**：`_settle_yesterday()` 在每次 `GET /tasks/goal` 时调用，检查昨日是否达标并更新状态
 - **历史任务只读**：Tasks 页切换到非今日日期时，所有编辑/添加/启动操作隐藏，`readOnly` prop 传入 TaskRow
 - **常规任务不按天统计**：routines 有自己的 log/streak，不出现在 daily_tasks 历史中
@@ -425,7 +444,10 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - [x] 未来可赢等级（0星/靛蓝配色，不计入星数，月历单独显示 ◇，分析抽屉单独列）
 - [x] 每日任务模块（模板库 + 当日任务 + 赏金任务 + 管理页）
 - [x] 直接勾选完成计入学习时间（写 manual task_run，取消时删除；支持「不计入学习时间」选项）
-- [x] 任务追踪器（3-2-1 倒计时 + 像素风追逐跑道 + 暂停/失败/提前完成/中断 + 结果页）
+- [x] 任务追踪器（3-2-1 倒计时 + 圆形追逐跑道 + 暂停/失败/提前完成/中断 + 结果页）
+- [x] 计时改时间戳驱动（窗口缩小/后台照常走表，废弃 rAF 累加）+ 暂停只由用户手动控制、与窗口前后台解耦
+- [x] PiP 悬浮窗（Chrome/Edge，计时器挂屏幕角落，边学习边看）
+- [x] 关窗恢复（localStorage 快照，≤10 分钟弹窗续传，超时按中断记录）
 - [x] 任务状态持久化（run_status：完成/失败/重试，时间轴均记录）
 - [x] 每日时间轴（竖排展示，手动完成记录可编辑开始时间，区分 runner/manual/routine 来源；常规任务标「常规」紫色；不计时任务标「不计时」灰色；hours=0 不显示）
 - [x] 每日提醒（托盘 + winotify Toast 通知）
@@ -448,6 +470,9 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - [x] 时间轴显示暂停次数（`暂停 Xs · N次`）
 - [x] 任务列表失败/中断显示完成百分比（`X% · 失败 · 可重试`）
 - [x] AI 自主监管者基础设施（supervisor 统一入口 + 消息队列 + 右下角气泡轮询，目前仅接入赢麻了）
+- [x] 可赢目标（赢麻了页面挂「未来可赢」带星级，赢一次累计连续/次数 + 按星级写当日记录，赢太多了归档进历史，winnables.json）
+- [x] 保留任务（每日任务可勾「保留任务」跨天不消失，init 时迁移过往未完成的保留任务到今天，计算/显示/计时与普通任务一致）
+- [x] 搭子聊天栏按天清零（GET /dialogue 只返回今天，全量历史保留后台；记忆 = 今天 16 条 + 更早随机抽样 6 条；业务数据全量喂 AI）
 
 **待开发**：
 - [ ] Buff 效果实际结算接入（task_score / daily_score / goal_shield / routine_double / lucky_dice）
@@ -464,13 +489,18 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - **业务操作触发**：你在赢麻了等页面操作，搭子异步生成主动反馈，出现在聊天栏。
 - **主动聊天**：你在聊天栏打字，搭子带历史回复。
 
-**核心：对话记忆**。两条路径共用同一条「对话历史」（`storage/ai_dialogue`，跨天保留），它既是聊天栏内容，也是搭子的记忆——每次生成都把最近对话（**含搭子自己说过的话**）拼进 prompt，所以它有连续感、且不会重复（看得见自己说过啥）。这和「桌面宠物每次单轮失忆」是本质区别。
+**核心：对话记忆**。两条路径共用同一条「对话历史」（`storage/ai_dialogue`，**全量跨天保留在后台文件**），它既是搭子的记忆，也是聊天栏内容的来源——每次生成都把对话（**含搭子自己说过的话**）拼进 prompt，所以它有连续感、且不会重复（看得见自己说过啥）。这和「桌面宠物每次单轮失忆」是本质区别。
+
+**聊天栏按天清零（显示 ≠ 记忆）**：
+- **显示**：`GET /ai/dialogue` 只返回**今天（游戏日，零点为界）**的对话（`ai_dialogue.today_turns()`）。每天打开聊天栏是干净的，过去的对话不呈现给用户——但**全部历史仍保留在 `ai_dialogue.json`**，只是不展示。
+- **记忆**：搭子生成回复时拼的是 `ai_dialogue.memory_turns(today_limit=16, past_sample=6)`＝**今天最近 16 条 + 更早历史里随机抽样 6 条**。今天的保证连续感/防今日内重复；旧对话当学习语料让回复更人性化，是否提及过去交给随机、不强求。
+- `recent_turns()` 保留作兼容旧调用；新逻辑走 `memory_turns()`。
 
 #### 一次生成发给 AI 的 messages（`_history_messages`）
 
 时间升序：
 1. `user`：全部业务数据快照（`supervisor_context.build_summary()`，本地读零成本）+ `assistant` 一句确认（"我都看着呢"）
-2. 最近 16 条真实对话（user/assistant 交替，搭子的历史回复也在内）
+2. 记忆对话（`memory_turns`：今天最近 16 条 + 更早随机抽样 6 条，user/assistant 交替，搭子的历史回复也在内）
 3. `user`：本次新输入 / 场景描述（`extra_user`）
 
 #### 业务数据聚合（`supervisor_context.build_summary()`）
