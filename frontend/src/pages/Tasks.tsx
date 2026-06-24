@@ -507,10 +507,14 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
 }
 
 // ── 赏金任务卡片 ──────────────────────────────────────────────
-function BountyCard({ bounty, onAccept, onExpire }: {
+// 赏金任务是日常任务的升级版：接受后同样能计时（复用 TaskRunner）、勾选完成。
+// onStart/onComplete 仅在 Tasks 页（可执行）传入；BountyPopup 弹窗里只接受/放弃。
+function BountyCard({ bounty, onAccept, onExpire, onStart, onComplete }: {
   bounty: DailyBounty
   onAccept: () => void
   onExpire: () => void
+  onStart?: () => void
+  onComplete?: () => void
 }) {
   const accepted = bounty.status === 'accepted' || bounty.status === 'done'
   return (
@@ -564,10 +568,29 @@ function BountyCard({ bounty, onAccept, onExpire }: {
           </button>
         </div>
       )}
-      {accepted && (
-        <p className="text-sm text-amber-700 font-medium flex items-center gap-1">
-          ✓ 已接受 · 完成任务可获得 {bounty.buff.emoji} {bounty.buff.name}
-        </p>
+      {bounty.status === 'accepted' && (
+        <>
+          <p className="text-sm text-amber-700 font-medium flex items-center gap-1">
+            ✓ 已接受 · 完成任务可获得 {bounty.buff.emoji} {bounty.buff.name}
+          </p>
+          {/* 执行能力：和日常任务一样可计时 / 直接勾选完成 */}
+          {(onStart || onComplete) && (
+            <div className="flex gap-2">
+              {onStart && (
+                <button onClick={onStart}
+                  className="flex-1 h-10 rounded-xl bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600 transition-colors flex items-center justify-center gap-1.5">
+                  <Play className="h-4 w-4" /> 开始计时
+                </button>
+              )}
+              {onComplete && (
+                <button onClick={onComplete}
+                  className="flex-1 h-10 rounded-xl border border-amber-300 text-amber-700 text-sm font-medium hover:bg-amber-100 transition-colors flex items-center justify-center gap-1.5">
+                  <Check className="h-4 w-4" /> 标记完成
+                </button>
+              )}
+            </div>
+          )}
+        </>
       )}
       {bounty.status === 'done' && (
         <p className="text-sm text-emerald-600 font-medium">🎉 已完成，buff 已生效！</p>
@@ -1062,6 +1085,8 @@ export function Tasks() {
   const [loading, setLoading]       = useState(true)
   const [totalScore, setTotalScore] = useState<number | null>(null)
   const [runningTask, setRunningTask] = useState<DailyTask | null>(null)
+  // 当前计时的是哪个赏金任务（非空时计时完成后标记该赏金 done）
+  const [runningBountyId, setRunningBountyId] = useState<string | null>(null)
   const [workRestCfg, setWorkRestCfg]   = useState<WorkRestConfig>({ work_mins: 30, rest_mins: 5 })
   const [timerModal, setTimerModal]     = useState(false)
   const [analysisOpen, setAnalysisOpen] = useState(false)
@@ -1194,6 +1219,50 @@ export function Tasks() {
     await api.tasks.respondBounty(id, 'expired')
     const updated = await api.tasks.dailyBounties().catch(() => bounties)
     setBounties(updated)
+  }
+  // 赏金任务开始计时：包装成 DailyTask 交给 TaskRunner（和常规任务同一套），
+  // source=bounty；记下 runningBountyId，计时成功完成后标记该赏金 done。
+  function handleBountyStart(b: DailyBounty) {
+    setRunnerInitSecs(0)
+    setRunningBountyId(b.id)
+    setRunningTask({
+      id: b.id,
+      content: b.content,
+      hours: b.hours,
+      stars: b.stars,
+      done: false,
+      from_template: false,
+      run_status: 'none',
+      count_in_effective: true,
+    } as DailyTask)
+  }
+  // 赏金任务直接勾选完成：写一条 manual run + 标记 done（不经过计时器）
+  async function handleBountyComplete(b: DailyBounty) {
+    const now = new Date()
+    const secs = Math.round(b.hours * 3600)
+    await api.tasks.saveRun({
+      task_id: b.id,
+      task_content: b.content,
+      date: selectedDate,
+      success: true,
+      started_at: new Date(now.getTime() - secs * 1000).toISOString(),
+      ended_at: now.toISOString(),
+      actual_seconds: secs,
+      pause_count: 0,
+      pause_seconds: 0,
+      task_hours: b.hours,
+      task_stars: b.stars,
+      end_reason: 'complete',
+      rest_remaining_secs: 0,
+      multiplier,
+      source: 'bounty',
+    }).catch(() => {})
+    await api.tasks.completeBounty(b.id).catch(() => {})
+    playTaskDone()
+    const updated = await api.tasks.dailyBounties().catch(() => bounties)
+    setBounties(updated)
+    setStudyRefreshKey(k => k + 1)
+    reload(selectedDate)
   }
 
   const done    = tasks.filter(t => t.done).length
@@ -1388,7 +1457,9 @@ export function Tasks() {
             {accepted.map(b => (
               <BountyCard key={b.id} bounty={b}
                 onAccept={() => handleBountyAccept(b.id)}
-                onExpire={() => handleBountyExpire(b.id)} />
+                onExpire={() => handleBountyExpire(b.id)}
+                onStart={isToday ? () => handleBountyStart(b) : undefined}
+                onComplete={isToday ? () => handleBountyComplete(b) : undefined} />
             ))}
           </div>
         )}
@@ -1496,7 +1567,7 @@ export function Tasks() {
       {runningTask && (
         <TaskRunner
           task={runningTask}
-          onClose={() => { setRunningTask(null); setRunnerInitSecs(0); setResumeRun(null); reload(selectedDate) }}
+          onClose={() => { setRunningTask(null); setRunnerInitSecs(0); setResumeRun(null); setRunningBountyId(null); reload(selectedDate) }}
           workMins={workRestCfg.work_mins}
           restMins={workRestCfg.rest_mins}
           multiplier={multiplier}
@@ -1505,6 +1576,17 @@ export function Tasks() {
           resumeStartedAtISO={resumeRun?.resumeStartedAtISO}
           resumePausedTotal={resumeRun?.resumePausedTotal}
           resumePauseCount={resumeRun?.resumePauseCount}
+          source={runningBountyId ? 'bounty' : 'runner'}
+          onFinished={runningBountyId ? (success) => {
+            // 赏金任务成功完成 → 标记 done；刷新赏金列表
+            if (success) {
+              const bid = runningBountyId
+              api.tasks.completeBounty(bid)
+                .then(() => api.tasks.dailyBounties())
+                .then(setBounties)
+                .catch(() => {})
+            }
+          } : undefined}
         />
       )}
 

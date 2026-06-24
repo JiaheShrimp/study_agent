@@ -271,6 +271,7 @@ export const api = {
       actual_seconds: number; pause_count: number; pause_seconds: number
       task_hours: number; task_stars: number
       end_reason: string; rest_remaining_secs: number; multiplier: number
+      source?: string
     }) => post<{ score: number; score_breakdown: ScoreBreakdown }>('/tasks/run', r),
     runs: (date?: string) => get<{
       task_id: string; task_content: string; date: string; success: boolean

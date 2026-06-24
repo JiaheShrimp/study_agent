@@ -367,6 +367,8 @@ export function TaskRunner({
   resumeStartedAtISO,
   resumePausedTotal = 0,
   resumePauseCount = 0,
+  source = 'runner',
+  onFinished,
 }: {
   task: DailyTask
   onClose: () => void
@@ -379,6 +381,10 @@ export function TaskRunner({
   resumeStartedAtISO?: string
   resumePausedTotal?: number
   resumePauseCount?: number
+  // 执行来源：runner（日常/常规）/ bounty（赏金任务）。写进 task_run，影响归属
+  source?: string
+  // run 保存后回调，success=是否成功完成（赏金任务据此标记 done）
+  onFinished?: (success: boolean) => void
 }) {
   const WORK_SECS = workMins * 60
   const REST_SECS = restMins * 60
@@ -466,11 +472,12 @@ export function TaskRunner({
   function finishRun(s: RunState, reason: EndReason) {
     clearPersist()
     const today = gameToday()
+    const success = reason === 'complete' || reason === 'early'
     api.tasks.saveRun({
       task_id: task.id,
       task_content: task.content,
       date: today,
-      success: reason === 'complete' || reason === 'early',
+      success,
       started_at: startedAtRef.current,
       ended_at: new Date().toISOString(),
       actual_seconds: Math.round(s.workedSecs),
@@ -481,8 +488,12 @@ export function TaskRunner({
       end_reason: reason,
       rest_remaining_secs: Math.round(s.restSecsLeft),
       multiplier,
+      source,
       // 注意：存总已工作秒数（含续传进度），中断后下次可据此续传
-    }).then(res => setScoreBreakdown(res.score_breakdown)).catch(() => {})
+    }).then(res => {
+      setScoreBreakdown(res.score_breakdown)
+      onFinished?.(success)
+    }).catch(() => {})
     setEndReason(reason)
     setPhase('result')
   }
