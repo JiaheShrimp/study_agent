@@ -212,6 +212,7 @@ class ChatIn(BaseModel):
 class ChatOut(BaseModel):
     reply: DialogueTurn
     assigned_bounty: bool = False   # 本次是否派发了赏金任务（前端据此刷新任务页）
+    bounty_content: str = ""        # 派发的任务内容（前端在聊天里明确展示派了啥）
 
 
 # ── 聊天里的「工具调用」：搭子接管 agent 操控权（统一地基） ──────────
@@ -351,7 +352,11 @@ def chat(body: ChatIn):
     ai_dialogue.append_turn("user", msg)
     reply_text, meta = _chat_react(msg)
     reply = ai_dialogue.append_turn("assistant", reply_text, trigger="chat")
-    return ChatOut(reply=DialogueTurn(**reply), assigned_bounty=bool(meta.get("assigned_bounty")))
+    return ChatOut(
+        reply=DialogueTurn(**reply),
+        assigned_bounty=bool(meta.get("assigned_bounty")),
+        bounty_content=str(meta.get("bounty_content", "")),
+    )
 
 
 class ProviderMeta(BaseModel):

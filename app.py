@@ -53,8 +53,10 @@ def _logfile(name: str):
     return open(os.path.join(LOG_DIR, name), "a", encoding="utf-8")
 
 def start_backend() -> subprocess.Popen:
+    # --reload：改后端代码自动重启，不用退出托盘再起。
+    # reloader 会拉起 worker 子进程；退出时靠 stop_all() 的端口清理兜底回收。
     return subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "main:app", "--port", "8000"],
+        [sys.executable, "-m", "uvicorn", "main:app", "--port", "8000", "--reload"],
         cwd=BACKEND,
         creationflags=subprocess.CREATE_NO_WINDOW,
         stdout=_logfile("backend.log"),
@@ -122,6 +124,9 @@ def stop_all() -> None:
             p.terminate()
         except Exception:
             pass
+    # --reload 会留下 worker 子进程占端口；清掉它，避免下次启动端口被占
+    _kill_port(8000)
+    _kill_port(5173)
 
 # ── 通知 ─────────────────────────────────────────────────────
 

@@ -8,7 +8,7 @@ type TaskRun = Awaited<ReturnType<typeof api.tasks.runs>>[number]
 import { cn, gameToday } from '@/lib/utils'
 import { TaskRunner, ACTIVE_RUN_KEY, type ActiveRunSnapshot } from '@/components/TaskRunner'
 import { StudyGoalCard } from '@/components/StudyGoalCard'
-import { playBountyAppear, playClick, playTaskDone } from '@/lib/sounds'
+import { playClick, playTaskDone } from '@/lib/sounds'
 import { StarWall } from '@/components/StarWall'
 
 // ── 工具 ─────────────────────────────────────────────────────
@@ -1061,7 +1061,6 @@ export function Tasks() {
   const [bounties, setBounties]      = useState<DailyBounty[]>([])
   const [loading, setLoading]       = useState(true)
   const [totalScore, setTotalScore] = useState<number | null>(null)
-  const [bountyModal, setBountyModal] = useState(false)
   const [runningTask, setRunningTask] = useState<DailyTask | null>(null)
   const [workRestCfg, setWorkRestCfg]   = useState<WorkRestConfig>({ work_mins: 30, rest_mins: 5 })
   const [timerModal, setTimerModal]     = useState(false)
@@ -1078,8 +1077,6 @@ export function Tasks() {
   const [resumeRun, setResumeRun] = useState<ResumeParams | null>(null)
   // 关窗恢复询问弹窗（≤10 分钟内重开时弹出）
   const [resumePrompt, setResumePrompt] = useState<ActiveRunSnapshot | null>(null)
-  // 本次会话已经弹出过的赏金任务 id，避免重复弹
-  const shownBountyIds = useRef<Set<string>>(new Set())
 
   const isToday = selectedDate === todayStr
 
@@ -1157,37 +1154,19 @@ export function Tasks() {
     }
   }, [])  // 仅挂载时执行一次
 
-  // 轮询：每 60 秒检查是否有到时间的赏金任务需要弹出
+  // 赏金弹窗已提升为全局组件（BountyPopup，挂在 AppLayout，任意页面都能弹）。
+  // 这里只负责让**本页的赏金列表**（已接受区 / 赏金计数）跟随刷新——
+  // 监听全局事件：聊天派任务（agent:bounty-refresh）或接受/放弃（agent:bounty-changed）。
   useEffect(() => {
     if (!isToday) return
-    function checkPending() {
-      api.tasks.pendingBounties().then(pending => {
-        if (pending.length === 0) return
-        // 找出本次会话首次出现的新赏金
-        const newOnes = pending.filter(p => !shownBountyIds.current.has(p.id))
-        setBounties(prev => {
-          const ids = new Set(prev.map(b => b.id))
-          return [...prev, ...pending.filter(p => !ids.has(p.id))]
-        })
-        if (newOnes.length > 0) {
-          newOnes.forEach(p => shownBountyIds.current.add(p.id))
-          setBountyModal(true)
-          playBountyAppear()
-        }
-      }).catch(() => {})
+    const refreshList = () => {
+      api.tasks.dailyBounties().then(setBounties).catch(() => {})
     }
-    checkPending()
-    const id = setInterval(checkPending, 60_000)
-    // 聊天里搭子按指令派了赏金任务 → 立即刷新几次，不必干等下一轮
-    const onBounty = () => {
-      checkPending()
-      window.setTimeout(checkPending, 800)
-      window.setTimeout(checkPending, 2000)
-    }
-    window.addEventListener('agent:bounty-refresh', onBounty)
+    window.addEventListener('agent:bounty-refresh', refreshList)
+    window.addEventListener('agent:bounty-changed', refreshList)
     return () => {
-      clearInterval(id)
-      window.removeEventListener('agent:bounty-refresh', onBounty)
+      window.removeEventListener('agent:bounty-refresh', refreshList)
+      window.removeEventListener('agent:bounty-changed', refreshList)
     }
   }, [isToday])
 
@@ -1210,14 +1189,11 @@ export function Tasks() {
     await api.tasks.respondBounty(id, 'accepted')
     const updated = await api.tasks.dailyBounties().catch(() => bounties)
     setBounties(updated)
-    // 没有剩余 pending 就关弹窗
-    if (!updated.some(b => b.status === 'pending')) setBountyModal(false)
   }
   async function handleBountyExpire(id: string) {
     await api.tasks.respondBounty(id, 'expired')
     const updated = await api.tasks.dailyBounties().catch(() => bounties)
     setBounties(updated)
-    if (!updated.some(b => b.status === 'pending')) setBountyModal(false)
   }
 
   const done    = tasks.filter(t => t.done).length
@@ -1238,7 +1214,7 @@ export function Tasks() {
           </div>
           <div className="flex gap-2">
             {isToday && pendingBounties.length > 0 && (
-              <button onClick={() => { playClick(); setBountyModal(true) }}
+              <button onClick={() => { playClick(); window.dispatchEvent(new CustomEvent('agent:bounty-open')) }}
                 className="flex items-center gap-1.5 text-xs text-amber-700 border border-amber-200 bg-amber-50 rounded-lg px-3 py-1.5 hover:bg-amber-100 transition-colors">
                 <Swords className="h-3.5 w-3.5" /> 赏金 {pendingBounties.length}
               </button>
@@ -1663,40 +1639,6 @@ export function Tasks() {
         </div>
       )}
 
-      {/* 赏金任务弹窗 */}
-      {bountyModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-foreground/15 backdrop-blur-sm" onClick={() => setBountyModal(false)} />
-          <div className="relative z-10 w-full max-w-lg mx-4 bg-card rounded-3xl border border-border shadow-2xl overflow-hidden">
-            <div className="h-1.5 bg-gradient-to-r from-amber-300 via-orange-300 to-yellow-300" />
-            <div className="p-7 space-y-5">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-widest">今日赏金</p>
-                  <h2 className="text-xl font-bold mt-1">⚔️ 新的赏金任务！</h2>
-                  <p className="text-sm text-muted-foreground mt-0.5">完成可获得额外 Buff 奖励</p>
-                </div>
-                <button onClick={() => setBountyModal(false)} className="text-muted-foreground hover:text-foreground mt-1">
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto">
-                {pendingBounties.map(b => (
-                  <BountyCard key={b.id} bounty={b}
-                    onAccept={() => handleBountyAccept(b.id)}
-                    onExpire={() => handleBountyExpire(b.id)} />
-                ))}
-              </div>
-              {pendingBounties.length > 0 && (
-                <button onClick={() => setBountyModal(false)}
-                  className="w-full h-10 text-sm text-muted-foreground hover:text-foreground transition-colors">
-                  稍后再看
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

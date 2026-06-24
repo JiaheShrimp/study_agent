@@ -568,7 +568,10 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - 任一路径失败 → 降级 `_plain_chat()`，**绝不误操作、不丢聊天能力**
 - `ChatOut.assigned_bounty = meta.get("assigned_bounty")`，前端据此联动
 
-**前端联动**：`assigned_bounty=True` 时 ChatSidebar 派发 `agent:bounty-refresh`，Tasks 页监听后立即（0/0.8/2s）刷新 `pendingBounties`，不必等 60s 轮询。
+**前端联动（全局赏金弹窗）**：赏金任务可能在**任意页面**产生（随机弹出 / 搭子在聊天里派的），而聊天栏是全局的——所以赏金弹窗也必须全局，否则在非任务页让搭子派任务，任务派了却没人提示。
+- `components/BountyPopup.tsx`：全局赏金弹窗，挂在 `AppLayout`（和 ChatSidebar 一样常驻）。轮询 `pendingBounties`（60s）+ 监听 `agent:bounty-refresh`（聊天派任务后 ChatSidebar 派发，立即 0/0.8/2s 刷新）→ 有新赏金就弹窗 + `playBountyAppear()`。接受/放弃就地处理，完后派发 `agent:bounty-changed`
+- ChatSidebar 派任务成功后，除派发 `agent:bounty-refresh`，还在**聊天栏内**显示一条确认条（`bounty_content`：「已派发到「每日任务」：XXX」），任意页面都看得见，不必切到任务页
+- Tasks 页不再自己弹窗/轮询；只监听 `agent:bounty-refresh`/`agent:bounty-changed` 刷新本页赏金列表（已接受区 + 「赏金 N」计数）；「赏金 N」按钮派发 `agent:bounty-open` 让全局弹窗打开
 
 **▶ 加一个新指令（如送 buff / 调目标）只需两步，识别/分发零改动**：
 1. 在 `ai_tools.py` 写个 handler，`@register_tool("grant_buff", "...", {JSON Schema}, intent_keywords=["送我buff","给我加成"])`，handler 里落地（调对应 storage/router 函数）+ 返回 `ToolResult`

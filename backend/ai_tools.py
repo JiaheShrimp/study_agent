@@ -165,4 +165,7 @@ def _assign_task(args: dict) -> ToolResult:
     )
     # reply 优先用 AI 给的理由，否则给个朴素确认
     reply = reason or f"给你派好了：{bounty['content']}。"
-    return ToolResult(ok=True, reply=reply, meta={"assigned_bounty": True})
+    return ToolResult(ok=True, reply=reply, meta={
+        "assigned_bounty": True,
+        "bounty_content": bounty["content"],   # 供前端在聊天里明确展示派了啥
+    })

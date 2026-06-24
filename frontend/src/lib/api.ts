@@ -361,7 +361,7 @@ export const api = {
     // 搭子对话：聊天栏轮询拉取历史 + 用户主动发消息
     dialogue: (limit = 50) => get<DialogueTurn[]>(`/ai/dialogue?limit=${limit}`),
     chat: (message: string) =>
-      post<{ reply: DialogueTurn; assigned_bounty: boolean }>('/ai/chat', { message }),
+      post<{ reply: DialogueTurn; assigned_bounty: boolean; bounty_content: string }>('/ai/chat', { message }),
   },
   spinner: {
     list: () => get<Spinner[]>('/spinner'),

@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { BottomNav } from './BottomNav'
 import { ChatSidebar } from '@/components/ChatSidebar'
+import { BountyPopup } from '@/components/BountyPopup'
 import { type DailyBonus } from '@/lib/api'
 
 interface Props {
@@ -29,6 +30,9 @@ export function AppLayout({ bonus }: Props) {
         </main>
         <BottomNav />
       </div>
+
+      {/* 全局赏金弹窗：随机/搭子派的赏金在任意页面都能弹出 */}
+      <BountyPopup />
     </div>
   )
 }

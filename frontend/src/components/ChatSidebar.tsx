@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Send, MessageCircle, X } from 'lucide-react'
+import { Send, MessageCircle, X, Swords } from 'lucide-react'
 import { api, type DialogueTurn } from '@/lib/api'
 import { playChatMessage } from '@/lib/sounds'
 import { cn } from '@/lib/utils'
@@ -23,6 +23,7 @@ export function ChatSidebar() {
   const [sending, setSending] = useState(false)
   const [thinking, setThinking] = useState(false)   // 搭子「正在思考」动态指示
   const [open, setOpen] = useState(true)   // 手机端可收起
+  const [assignedNote, setAssignedNote] = useState<string | null>(null)  // 刚派发任务的确认条
   const scrollRef = useRef<HTMLDivElement>(null)
   // 已知最后一条 assistant 消息 id，用于判断是否有新反馈（触发音效 + 收尾思考态）
   const lastAssistantIdRef = useRef<string | null>(null)
@@ -115,9 +116,11 @@ export function ChatSidebar() {
     startThinking()
     try {
       const res = await api.ai.chat(msg)
-      // 搭子按指令派了赏金任务 → 通知任务页尽快刷新展示
+      // 搭子按指令派了赏金任务 → 通知任务页刷新 + 在聊天里明确确认派了啥
       if (res?.assigned_bounty) {
         window.dispatchEvent(new CustomEvent('agent:bounty-refresh'))
+        setAssignedNote(res.bounty_content || '已派发一个任务')
+        setTimeout(() => setAssignedNote(null), 8000)
       }
       // 用服务端权威历史覆盖（含真实 id 和搭子回复）
       await refresh()
@@ -211,6 +214,16 @@ export function ChatSidebar() {
           </div>
         )}
       </div>
+
+      {/* 派发任务确认条：搭子刚派了任务，明确告诉你派了啥（在任意页面都可见） */}
+      {assignedNote && (
+        <div className="mx-3 mb-2 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <Swords className="h-4 w-4 shrink-0 mt-0.5 text-amber-600" />
+          <span className="leading-snug">
+            已派发到「每日任务」：<span className="font-semibold">{assignedNote}</span>
+          </span>
+        </div>
+      )}
 
       {/* 输入框 */}
       <form onSubmit={handleSend} className="border-t p-3 flex items-end gap-2">
