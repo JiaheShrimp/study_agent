@@ -569,7 +569,8 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - `ChatOut.assigned_bounty = meta.get("assigned_bounty")`，前端据此联动
 
 **前端联动（全局赏金弹窗）**：赏金任务可能在**任意页面**产生（随机弹出 / 搭子在聊天里派的），而聊天栏是全局的——所以赏金弹窗也必须全局，否则在非任务页让搭子派任务，任务派了却没人提示。
-- `components/BountyPopup.tsx`：全局赏金弹窗，挂在 `AppLayout`（和 ChatSidebar 一样常驻）。轮询 `pendingBounties`（60s）+ 监听 `agent:bounty-refresh`（聊天派任务后 ChatSidebar 派发，立即 0/0.8/2s 刷新）→ 有新赏金就弹窗 + `playBountyAppear()`。接受/放弃就地处理，完后派发 `agent:bounty-changed`
+- `components/BountyPopup.tsx`：全局赏金弹窗，挂在 `AppLayout`（和 ChatSidebar 一样常驻）。轮询 `pendingBounties`（60s）+ 监听 `agent:bounty-refresh`（聊天派任务后 ChatSidebar 派发，立即 0/0.8/2s 刷新）→ **只在出现没弹过的新赏金时**才弹窗 + `playBountyAppear()`。接受/放弃就地处理，完后派发 `agent:bounty-changed`
+- **「已弹过的 id」持久化在 localStorage**（`agent.shownBountyIds`，按游戏日分桶跨天自动清）。否则切页面时组件重挂载会丢失会话级记忆，把已有 pending 当成新的反复弹——这是修过的 bug。只有真正新产生的赏金 id 才弹
 - ChatSidebar 派任务成功后，除派发 `agent:bounty-refresh`，还在**聊天栏内**显示一条确认条（`bounty_content`：「已派发到「每日任务」：XXX」），任意页面都看得见，不必切到任务页
 - Tasks 页不再自己弹窗/轮询；只监听 `agent:bounty-refresh`/`agent:bounty-changed` 刷新本页赏金列表（已接受区 + 「赏金 N」计数）；「赏金 N」按钮派发 `agent:bounty-open` 让全局弹窗打开
 

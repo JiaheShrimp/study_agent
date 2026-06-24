@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Swords, X, Clock, Star, MessageCircle } from 'lucide-react'
 import { api, type DailyBounty } from '@/lib/api'
+import { gameToday } from '@/lib/utils'
 import { playBountyAppear } from '@/lib/sounds'
 
 // ─────────────────────────────────────────────────────────────
@@ -11,29 +12,52 @@ import { playBountyAppear } from '@/lib/sounds'
 // 搭子派任务，任务真的派了却没人提示你。
 //
 // 职责：轮询 pending 赏金 + 监听 agent:bounty-refresh（聊天派任务后触发）→
-// 有新赏金就弹窗 + 音效。接受/放弃就地处理。
+// **只在出现没弹过的新赏金时**才弹窗 + 音效。接受/放弃就地处理。
+//
+// 「已弹过的 id」持久化在 localStorage（按游戏日分桶，跨天自动清）。否则切页面
+// 时组件重挂载会丢失会话级记忆，把已有 pending 当成新的反复弹（之前的 bug）。
 // ─────────────────────────────────────────────────────────────
 
 const POLL_INTERVAL = 60_000
+const SHOWN_KEY = 'agent.shownBountyIds'
+
+// 读取今天已弹过的赏金 id 集合（跨天自动重置）
+function loadShown(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SHOWN_KEY)
+    if (raw) {
+      const obj = JSON.parse(raw) as { day: string; ids: string[] }
+      if (obj.day === gameToday()) return new Set(obj.ids)
+    }
+  } catch { /* 忽略损坏数据 */ }
+  return new Set()
+}
+
+function saveShown(ids: Set<string>): void {
+  try {
+    localStorage.setItem(SHOWN_KEY, JSON.stringify({ day: gameToday(), ids: [...ids] }))
+  } catch { /* 忽略写入失败 */ }
+}
 
 export function BountyPopup() {
   const [pending, setPending] = useState<DailyBounty[]>([])
   const [open, setOpen] = useState(false)
-  // 本会话已弹过的赏金 id，避免重复弹
-  const shownIds = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     function check() {
       // 只在「今天」有意义；游戏日以零点为界
       api.tasks.pendingBounties().then(list => {
         if (!list.length) return
-        const fresh = list.filter(b => !shownIds.current.has(b.id))
+        const shown = loadShown()
+        const fresh = list.filter(b => !shown.has(b.id))
         setPending(prev => {
           const ids = new Set(prev.map(b => b.id))
           return [...prev.filter(b => list.some(l => l.id === b.id)), ...list.filter(b => !ids.has(b.id))]
         })
+        // 只有出现「没弹过的新赏金」才弹窗；纯切页/重挂载不会再弹
         if (fresh.length) {
-          fresh.forEach(b => shownIds.current.add(b.id))
+          fresh.forEach(b => shown.add(b.id))
+          saveShown(shown)
           setOpen(true)
           playBountyAppear()
         }
