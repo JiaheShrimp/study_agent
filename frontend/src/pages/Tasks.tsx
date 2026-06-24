@@ -507,14 +507,17 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
 }
 
 // ── 赏金任务卡片 ──────────────────────────────────────────────
-// 赏金任务是日常任务的升级版：接受后同样能计时（复用 TaskRunner）、勾选完成。
-// onStart/onComplete 仅在 Tasks 页（可执行）传入；BountyPopup 弹窗里只接受/放弃。
-function BountyCard({ bounty, onAccept, onExpire, onStart, onComplete }: {
+// 赏金任务是日常任务的升级版：接受后同样能计时（复用 TaskRunner）、勾选完成、
+// 中断后保持进度可续。onStart/onComplete 仅在 Tasks 页（可执行）传入；
+// BountyPopup 弹窗里只接受/放弃。paused/completePct 表示有中断进度可续。
+function BountyCard({ bounty, onAccept, onExpire, onStart, onComplete, paused = false, completePct }: {
   bounty: DailyBounty
   onAccept: () => void
   onExpire: () => void
   onStart?: () => void
   onComplete?: () => void
+  paused?: boolean
+  completePct?: number
 }) {
   const accepted = bounty.status === 'accepted' || bounty.status === 'done'
   return (
@@ -573,13 +576,19 @@ function BountyCard({ bounty, onAccept, onExpire, onStart, onComplete }: {
           <p className="text-sm text-amber-700 font-medium flex items-center gap-1">
             ✓ 已接受 · 完成任务可获得 {bounty.buff.emoji} {bounty.buff.name}
           </p>
+          {/* 中断进度提示（和日常任务一致：保持进度可续） */}
+          {paused && completePct != null && (
+            <p className="text-xs text-amber-600 font-medium">
+              {completePct}% · 已暂停 · 点击继续
+            </p>
+          )}
           {/* 执行能力：和日常任务一样可计时 / 直接勾选完成 */}
           {(onStart || onComplete) && (
             <div className="flex gap-2">
               {onStart && (
                 <button onClick={onStart}
                   className="flex-1 h-10 rounded-xl bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600 transition-colors flex items-center justify-center gap-1.5">
-                  <Play className="h-4 w-4" /> 开始计时
+                  <Play className="h-4 w-4" /> {paused ? '继续计时' : '开始计时'}
                 </button>
               )}
               {onComplete && (
@@ -1174,6 +1183,7 @@ export function Tasks() {
         end_reason: 'giveup',
         rest_remaining_secs: Math.round(snap.restSecsLeft),
         multiplier: snap.multiplier,
+        source: snap.source,
       }).catch(() => {}).finally(() => reload(gameToday()))
       try { localStorage.removeItem(ACTIVE_RUN_KEY) } catch {}
     }
@@ -1220,10 +1230,13 @@ export function Tasks() {
     const updated = await api.tasks.dailyBounties().catch(() => bounties)
     setBounties(updated)
   }
-  // 赏金任务开始计时：包装成 DailyTask 交给 TaskRunner（和常规任务同一套），
-  // source=bounty；记下 runningBountyId，计时成功完成后标记该赏金 done。
+  // 赏金任务开始计时：包装成 DailyTask 交给 TaskRunner（和日常/常规任务同一套）。
+  // 中断续传：和日常任务一样，从最后一条未成功 run 的 actual_seconds 续上进度，
+  // 这样赏金任务也能「中断 → 保持进度 → 下次继续」。
   function handleBountyStart(b: DailyBounty) {
-    setRunnerInitSecs(0)
+    const lastRun = [...runs].filter(r => r.task_id === b.id).pop()
+    const paused = lastRun ? !lastRun.success : false
+    setRunnerInitSecs(paused ? (lastRun?.actual_seconds ?? 0) : 0)
     setRunningBountyId(b.id)
     setRunningTask({
       id: b.id,
@@ -1232,7 +1245,7 @@ export function Tasks() {
       stars: b.stars,
       done: false,
       from_template: false,
-      run_status: 'none',
+      run_status: paused ? 'paused' : 'none',
       count_in_effective: true,
     } as DailyTask)
   }
@@ -1454,13 +1467,23 @@ export function Tasks() {
         {accepted.length > 0 && (
           <div className="space-y-2">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">赏金任务</p>
-            {accepted.map(b => (
-              <BountyCard key={b.id} bounty={b}
-                onAccept={() => handleBountyAccept(b.id)}
-                onExpire={() => handleBountyExpire(b.id)}
-                onStart={isToday ? () => handleBountyStart(b) : undefined}
-                onComplete={isToday ? () => handleBountyComplete(b) : undefined} />
-            ))}
+            {accepted.map(b => {
+              // 从执行记录推导中断进度（和日常任务同一套口径）
+              const lastRun = [...runs].filter(r => r.task_id === b.id).pop()
+              const paused = b.status === 'accepted' && !!lastRun && !lastRun.success
+              const completePct = paused && lastRun
+                ? Math.min(99, Math.round((lastRun.actual_seconds / Math.max(lastRun.task_hours * 3600, 1)) * 100))
+                : undefined
+              return (
+                <BountyCard key={b.id} bounty={b}
+                  paused={paused}
+                  completePct={completePct}
+                  onAccept={() => handleBountyAccept(b.id)}
+                  onExpire={() => handleBountyExpire(b.id)}
+                  onStart={isToday ? () => handleBountyStart(b) : undefined}
+                  onComplete={isToday ? () => handleBountyComplete(b) : undefined} />
+              )
+            })}
           </div>
         )}
 
@@ -1535,6 +1558,8 @@ export function Tasks() {
               resumePausedTotal: snap.pausedTotal,
               resumePauseCount: snap.pauseCount,
             })
+            // 恢复赏金归属：source=bounty 时续传后完成也能正确标记 done
+            setRunningBountyId(snap.source === 'bounty' ? snap.task.id : null)
             setRunningTask(snap.task)
             setResumePrompt(null)
           }}
@@ -1556,6 +1581,7 @@ export function Tasks() {
               end_reason: 'giveup',
               rest_remaining_secs: Math.round(snap.restSecsLeft),
               multiplier: snap.multiplier,
+              source: snap.source,
             }).catch(() => {}).finally(() => reload(gameToday()))
             try { localStorage.removeItem(ACTIVE_RUN_KEY) } catch {}
             setResumePrompt(null)

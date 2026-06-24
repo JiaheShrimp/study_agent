@@ -30,6 +30,7 @@ export interface ActiveRunSnapshot {
   multiplier: number
   reached: boolean          // 是否已到达预计时间
   savedAtISO: string        // 快照写入时间（用于关窗后计算流逝）
+  source?: string           // 执行来源（runner/bounty…），关窗恢复时保留归属
 }
 
 // ── 倒计时弹窗 ────────────────────────────────────────────────
@@ -461,9 +462,10 @@ export function TaskRunner({
       multiplier,
       reached: reachedRef.current,
       savedAtISO: new Date().toISOString(),
+      source,
     }
     try { localStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(snap)) } catch {}
-  }, [task, initProgress, workMins, restMins, multiplier])
+  }, [task, initProgress, workMins, restMins, multiplier, source])
 
   function clearPersist() {
     try { localStorage.removeItem(ACTIVE_RUN_KEY) } catch {}
