@@ -20,6 +20,7 @@ from storage.tasks import (
     _read, _write, DATA_DIR, DAILY_TASKS_FILE,
 )
 from storage.config import load_config
+from routers.ai import supervisor_react
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -723,6 +724,25 @@ def save_run_result(body: TaskRunResult):
     runs.append(record)
     _write(path, runs)
     save_daily_tasks(body.date, tasks)
+
+    # 搭子反馈：完成 / 中断·力竭（仅今天的计时任务，按概率+冷却，不频繁）
+    if body.date == _game_today():
+        mins = round(body.actual_seconds / 60)
+        if body.success:
+            supervisor_react("task_done", {
+                "content": body.task_content,
+                "early": body.end_reason == "early",
+                "minutes": mins,
+                "score": breakdown.total,
+            })
+        elif body.end_reason in ("giveup", "failed"):
+            pct = min(99, round(body.actual_seconds / max(body.task_hours * 3600, 1) * 100))
+            supervisor_react("task_failed", {
+                "content": body.task_content,
+                "reason": body.end_reason,
+                "percent": pct,
+            })
+
     return RunSaveResponse(score=breakdown.total, score_breakdown=breakdown)
 
 class RunTimeUpdate(BaseModel):
@@ -1180,6 +1200,15 @@ def mark_routine_done(routine_id: str, date: str | None = None):
                     "score": routine_score,
                 })
             _write(runs_path, runs)
+
+            # 搭子反馈：常规打卡到达连续里程碑（3/7/14/21/30/50/100…）才说话
+            if new_val:
+                streak = r.get("streak", 0)
+                if streak in (3, 7, 14, 21, 30, 50, 100) or (streak >= 100 and streak % 50 == 0):
+                    supervisor_react("routine_milestone", {
+                        "content": r.get("content", ""),
+                        "streak": streak,
+                    })
 
         return _routine_to_model(r, fl)
     raise HTTPException(404, "常规任务不存在")

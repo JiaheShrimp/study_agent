@@ -72,6 +72,34 @@ def append_turn(role: Role, content: str, trigger: str = "") -> dict[str, Any]:
     return turn
 
 
+def seconds_since_last_assistant() -> float | None:
+    """距搭子上一次发言过去了多少秒（无任何发言返回 None）。
+
+    用于触发冷却：太久没人冒泡才允许主动说话 / 操作反馈之间留间隔，避免太吵。
+    """
+    items = load_dialogue()
+    for t in reversed(items):
+        if t.get("role") == "assistant":
+            try:
+                last = datetime.fromisoformat(t["at"])
+            except Exception:
+                return None
+            return (datetime.now() - last).total_seconds()
+    return None
+
+
+def seconds_since_last_turn() -> float | None:
+    """距最近一条对话（含用户/搭子）过去多少秒。用于「闲置多久」判断。"""
+    items = load_dialogue()
+    if not items:
+        return None
+    try:
+        last = datetime.fromisoformat(items[-1]["at"])
+    except Exception:
+        return None
+    return (datetime.now() - last).total_seconds()
+
+
 def _turn_day(turn: dict[str, Any]) -> str:
     """取某条对话所属的游戏日（YYYY-MM-DD）。"""
     return str(turn.get("at", ""))[:10]

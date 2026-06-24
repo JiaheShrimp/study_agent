@@ -23,6 +23,12 @@ app.include_router(tasks.router)
 app.include_router(ai.router)
 app.include_router(spinner.router)
 
+@app.on_event("startup")
+def _start_background():
+    # 搭子主动说话：后台定时，随机间隔不吵
+    ai.start_idle_speaker()
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}

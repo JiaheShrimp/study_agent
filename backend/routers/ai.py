@@ -48,29 +48,34 @@ SUPERVISOR_SYSTEM = (
     "5. 用中文，可以带一点 emoji 但别超过一个。"
 )
 
-# 每种触发来源的反馈概率（0~1）。控制搭子主动冒泡的频率。
-# win_created 设为 1.0：记一条赢就必回，避免「偶尔不吭声」被当成坏了。
-TRIGGER_PROBABILITY: dict[str, float] = {
-    "win_created": 1.0,
-}
+# ─────────────────────────────────────────────────────────────
+# 触发器注册表（统一结构）
+#
+# 搭子对 agent 里各种操作的反馈，全部收拢成「一个触发器 = 一条注册」：
+#   - prob:     命中概率（0~1），控制冒泡频率
+#   - cooldown: 全局冷却秒数——距搭子上次发言不足这么久则跳过，避免连续操作太吵
+#               （win_created 例外：记赢必回，cooldown=0）
+#   - scene:    场景构造器 (context)->str，只描述「这次发生了什么」；
+#               业务数据/对话历史由 _history_messages 统一注入，不在这里拼
+#   - fallback: AI 不可用/超时时的兜底文案池（伙伴口吻，不说教）
+#
+# 加新触发点：在 TRIGGERS 里加一条 Trigger，然后在业务函数里调 supervisor_react("xxx", {...})。
+# 不用改任何分发/冷却逻辑。
+# ─────────────────────────────────────────────────────────────
 
-# 各触发来源在 AI 不可用/超时时的兜底文案（伙伴口吻，不说教）。
-# 正常情况下应由 AI 结合记忆生成个性化内容，这只是保证功能不崩。
-FALLBACK_LINES: dict[str, list[str]] = {
-    "win_created": [
-        "看到啦，这条记下了，挺好的。👀",
-        "嘿，又赢了一把，我有在认真看哦。",
-        "记下来了，这种感觉是不是还挺爽的。",
-        "不错呀，这一笔我替你高兴。",
-    ],
-}
+from dataclasses import dataclass, field
+from typing import Callable
 
 
-def _build_win_scene(context: dict) -> str:
-    """
-    赢麻了触发：返回「这次发生了什么」的场景描述（scene）。
-    业务数据与对话历史由 _history_messages 统一注入，这里只描述当下这件事。
-    """
+@dataclass
+class Trigger:
+    prob: float
+    cooldown: int                       # 全局冷却秒数（距上次搭子发言）
+    scene: Callable[[dict], str]
+    fallback: list[str] = field(default_factory=list)
+
+
+def _scene_win(context: dict) -> str:
     level_label = {
         "small": "小赢（做到了一件事）",
         "medium": "中赢（明显进步）",
@@ -79,18 +84,83 @@ def _build_win_scene(context: dict) -> str:
     }.get(context.get("win_level", ""), "一条进步记录")
     content = context.get("content", "")
     recent = context.get("recent_count_today", 0)
-    scene = [
-        f"我刚刚在「赢麻了」里记录了一条 {level_label}，内容是：「{content}」。",
-    ]
+    s = [f"我刚刚在「赢麻了」里记录了一条 {level_label}，内容是：「{content}」。"]
     if recent > 1:
-        scene.append(f"这是我今天记录的第 {recent} 条了。")
-    scene.append("请像朋友一样，结合这条记录和你对我的了解，自然地回我一句。")
-    return "\n".join(scene)
+        s.append(f"这是我今天记录的第 {recent} 条了。")
+    s.append("请像朋友一样，结合这条记录和你对我的了解，自然地回我一句。")
+    return "\n".join(s)
 
 
-# 触发来源 → 场景构造器，新增触发点时在此登记即可。
-_PROMPT_BUILDERS = {
-    "win_created": _build_win_scene,
+def _scene_task_done(context: dict) -> str:
+    content = context.get("content", "")
+    early = context.get("early", False)
+    mins = context.get("minutes", 0)
+    score = context.get("score", 0)
+    s = [f"我刚完成了任务「{content}」" + ("，还是提前完成的" if early else "") + "。"]
+    if mins:
+        s.append(f"专注了大约 {mins} 分钟" + (f"，拿了 {score} 分。" if score else "。"))
+    s.append("像朋友一样，结合这件事和你对我的了解，自然回我一句（别喊口号）。")
+    return "\n".join(s)
+
+
+def _scene_task_failed(context: dict) -> str:
+    content = context.get("content", "")
+    reason = context.get("reason", "")
+    pct = context.get("percent", 0)
+    how = "中途停了" if reason == "giveup" else "力竭没撑住"
+    s = [f"我刚才做任务「{content}」{how}，完成了大概 {pct}%。"]
+    s.append("别说教、别让我加油，就像懂我的朋友那样轻松接一句（可以损我但要暖）。")
+    return "\n".join(s)
+
+
+def _scene_task_start(context: dict) -> str:
+    content = context.get("content", "")
+    return (f"我刚开始做任务「{content}」，正在计时。"
+            "随口给我一句话就行，别喊口号、别命令我，像朋友一样。")
+
+
+def _scene_routine_milestone(context: dict) -> str:
+    content = context.get("content", "")
+    streak = context.get("streak", 0)
+    return (f"我的常规习惯「{content}」已经连续打卡 {streak} 天了。"
+            "这是个值得一提的里程碑，像朋友一样真心替我高兴地说一句。")
+
+
+def _scene_idle(context: dict) -> str:
+    mins = context.get("idle_minutes", 0)
+    return ("现在没什么新动静"
+            + (f"（大概 {mins} 分钟没动了）" if mins else "")
+            + "。你不是来催我的——就随口找点我记录里的事聊聊、调侃一下，"
+            "像朋友突然发来一条微信。别提『加油/快去学习』。")
+
+
+# trigger id -> Trigger。新增触发点只在这里加一条。
+TRIGGERS: dict[str, Trigger] = {
+    "win_created": Trigger(
+        prob=1.0, cooldown=0, scene=_scene_win,
+        fallback=["看到啦，这条记下了，挺好的。👀", "嘿，又赢了一把，我有在认真看哦。",
+                  "记下来了，这种感觉是不是还挺爽的。", "不错呀，这一笔我替你高兴。"],
+    ),
+    "task_done": Trigger(
+        prob=0.7, cooldown=900, scene=_scene_task_done,
+        fallback=["搞定一个，舒服。", "这件事画上句号啦，不错。", "完成了哈，我看着呢。"],
+    ),
+    "task_failed": Trigger(
+        prob=0.6, cooldown=900, scene=_scene_task_failed,
+        fallback=["没关系，停一下也正常。", "今天先这样，回头再说。", "嗯，状态有起伏很正常。"],
+    ),
+    "task_start": Trigger(
+        prob=0.25, cooldown=1800, scene=_scene_task_start,
+        fallback=["开整啦，我陪着。", "走起，我在这看着。"],
+    ),
+    "routine_milestone": Trigger(
+        prob=0.9, cooldown=600, scene=_scene_routine_milestone,
+        fallback=["这个坚持得是真可以。", "连着这么多天，稳。"],
+    ),
+    "idle": Trigger(
+        prob=1.0, cooldown=0, scene=_scene_idle,   # 主动说话：频率由后台定时器控制
+        fallback=["在忙啥呢，冒个泡。", "我突然想起你前两天那条记录，挺有意思。"],
+    ),
 }
 
 
@@ -158,9 +228,9 @@ def _generate(extra_user: str, *, fallback_pool: list[str]) -> str:
 def _react_sync(trigger: str, context: dict) -> None:
     """后台线程：业务操作触发的主动反馈，生成后写入对话历史。"""
     try:
-        builder = _PROMPT_BUILDERS.get(trigger)
-        scene = builder(context) if builder else "请随口跟我说一句。"
-        line = _generate(scene, fallback_pool=FALLBACK_LINES.get(trigger, []))
+        t = TRIGGERS.get(trigger)
+        scene = t.scene(context) if t else "请随口跟我说一句。"
+        line = _generate(scene, fallback_pool=(t.fallback if t else []))
         ai_dialogue.append_turn("assistant", line, trigger=trigger)
     except Exception:
         # 搭子出错绝不能影响主流程
@@ -171,18 +241,65 @@ def supervisor_react(trigger: str, context: dict | None = None, *, force: bool =
     """
     搭子统一入口。agent 任意操作都可以调用它。
 
-    - trigger: 触发来源标识（如 "win_created"）
-    - context: 该次操作的相关数据，交给 prompt 构造器
-    - force:   True 时跳过概率判定，必定反馈
+    - trigger: 触发来源标识（在 TRIGGERS 注册过）
+    - context: 该次操作的相关数据，交给场景构造器
+    - force:   True 时跳过概率/冷却判定，必定反馈
 
-    按概率决定是否反馈；命中后在后台线程异步生成并写入对话历史，不阻塞主请求。
+    判定顺序：① 全局冷却（距上次搭子发言不足 cooldown 秒则跳过，避免连续操作太吵）
+    → ② 命中概率。通过后在后台线程异步生成并写入对话历史，不阻塞主请求。
     前端聊天栏轮询 /ai/dialogue 即可看到新消息。
     """
     context = context or {}
-    prob = TRIGGER_PROBABILITY.get(trigger, 0.0)
-    if not force and random.random() > prob:
+    t = TRIGGERS.get(trigger)
+    if t is None:
         return
+    if not force:
+        # 全局冷却：太久没冒泡才允许，避免短时间连环触发刷屏
+        if t.cooldown > 0:
+            gap = ai_dialogue.seconds_since_last_assistant()
+            if gap is not None and gap < t.cooldown:
+                return
+        if random.random() > t.prob:
+            return
     threading.Thread(target=_react_sync, args=(trigger, context), daemon=True).start()
+
+
+# ── 主动说话（后台定时，随机间隔不吵） ─────────────────────────────
+#
+# 你不操作、开着 agent 时，搭子也会偶尔自己冒个泡。靠一个后台线程：
+# 每隔一段时间醒来，按概率 + 冷却决定要不要主动说一句（结合你的数据随口聊）。
+# 关键是「不吵」：醒来间隔随机、有概率不说、距上次任何对话太近就跳过。
+
+IDLE_CHECK_MIN_SEC = 30 * 60      # 醒来检查的最小间隔
+IDLE_CHECK_MAX_SEC = 90 * 60      # 最大间隔（每轮在这区间随机）
+IDLE_MIN_QUIET_SEC = 25 * 60      # 距最近一条对话至少这么久没动静，才考虑主动说
+IDLE_SPEAK_PROB = 0.6             # 满足安静条件后，仍按此概率决定是否真说（再降一档频率）
+
+
+def _idle_speak_once() -> None:
+    """满足条件就主动说一句（结合数据随口聊）。不满足则安静。"""
+    quiet = ai_dialogue.seconds_since_last_turn()
+    # 最近有过对话（你刚操作过/刚聊过）→ 不打扰
+    if quiet is not None and quiet < IDLE_MIN_QUIET_SEC:
+        return
+    if random.random() > IDLE_SPEAK_PROB:
+        return
+    idle_min = int(quiet // 60) if quiet else 0
+    supervisor_react("idle", {"idle_minutes": idle_min}, force=True)
+
+
+def start_idle_speaker() -> None:
+    """启动后台主动说话线程（进程内只需启一次）。AI 不可用时静默空转。"""
+    def loop():
+        import time
+        while True:
+            time.sleep(random.randint(IDLE_CHECK_MIN_SEC, IDLE_CHECK_MAX_SEC))
+            try:
+                if ai_client.is_available():
+                    _idle_speak_once()
+            except Exception:
+                pass
+    threading.Thread(target=loop, daemon=True).start()
 
 
 # ── 对话历史接口（聊天栏） ──────────────────────────────────────

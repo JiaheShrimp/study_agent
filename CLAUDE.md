@@ -518,14 +518,22 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 - **读自己回复**：对话历史里有搭子说过的话，它不会再说一遍（"已经夸过论文框架了，换个说"）
 - **随机抽样**：每次喂的"老记录"不同，覆盖更均匀
 
-#### 统一入口 & 接入新触发点
+#### 统一触发器注册表（TRIGGERS）& 接入新触发点
 
-`supervisor_react(trigger, context, *, force=False)` 是搭子的唯一业务入口：按 `TRIGGER_PROBABILITY` 概率命中 → 后台 daemon 线程异步生成 → 写入对话历史（不阻塞主请求，出错静默不影响主流程）。接入新触发点：
+搭子对 agent 各种操作的反馈收拢成**一个注册表** `TRIGGERS: dict[str, Trigger]`（`routers/ai.py`）。每个 `Trigger` = `prob`（命中概率）+ `cooldown`（全局冷却秒数）+ `scene`（场景构造器）+ `fallback`（兜底文案池）。
 
-1. 在 `TRIGGER_PROBABILITY` 注册触发 id 和概率
-2. 写一个**场景构造器** `_build_xxx_scene(context)`（只描述「这次发生了什么」，业务数据/历史由 `_history_messages` 统一注入，**不要自己拼数据**），登记到 `_PROMPT_BUILDERS`
-3. 在 `FALLBACK_LINES` 加兜底文案（伙伴口吻，AI 超时/未配置时用）
-4. 在对应 router 的业务函数里：先 `ai_dialogue.append_turn("user", "（操作描述）", trigger=...)` 写操作流水，再调 `supervisor_react("xxx", {...context})`
+`supervisor_react(trigger, context, *, force=False)` 是唯一业务入口，判定顺序：
+1. **全局冷却**：`ai_dialogue.seconds_since_last_assistant()` 距搭子上次发言 < `cooldown` 则跳过（避免连续操作刷屏；`win_created`/`idle` cooldown=0）
+2. **命中概率** `prob`
+3. 通过 → 后台 daemon 线程异步生成（`scene` 描述「这次发生了什么」+ `_history_messages` 统一注入业务数据/对话历史）→ 写入对话历史。不阻塞主请求、出错静默
+
+**已注册触发点**：`win_created`(1.0/无冷却) · `task_done`(0.7/15min) · `task_failed`(0.6/15min) · `task_start`(0.25/30min，暂无后端 hook 未启用) · `routine_milestone`(0.9/10min，streak∈{3,7,14,21,30,50,100…}) · `idle`(主动说话)
+
+**接入新触发点（只需两步，分发/冷却零改动）**：
+1. 在 `TRIGGERS` 加一条 `Trigger`（概率/冷却/`_scene_xxx` 构造器/兜底）
+2. 在对应 router 业务函数里调 `supervisor_react("xxx", {...context})`
+
+**主动说话（idle）**：`start_idle_speaker()` 后台线程（`main.py` startup 启动），每 30~90min 随机醒来，若距最近对话 ≥25min（没在操作/聊天）且概率命中，就 `force` 触发 `idle` 让搭子结合数据随口冒泡。三重「不吵」：随机间隔 + 安静门槛 + 概率。
 
 #### 角色人设
 
@@ -584,14 +592,18 @@ ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或
 
 #### 触发点
 
-| trigger | 概率 | 位置 / 说明 |
+| trigger | 概率/冷却 | 位置 / 说明 |
 |---------|------|------|
-| `win_created` | **1.0（必触发）** | `routers/wins.py` 记录赢麻了后。操作信息只作为 `context` 传给 AI 当背景，**不写进对话历史、不在聊天框显示成 user 气泡**（聊天框只出现搭子反馈） |
-| `chat` | —（用户主动） | `POST /ai/chat`，带工具能力（可派任务，见上） |
+| `win_created` | 1.0 / 无冷却 | `routers/wins.py` 记录赢麻了后。context 只作背景，不写对话历史 |
+| `task_done` | 0.7 / 15min | `routers/tasks.py` `save_run_result` 成功完成（含提前） |
+| `task_failed` | 0.6 / 15min | `save_run_result` 中断（giveup）/ 力竭（failed） |
+| `routine_milestone` | 0.9 / 10min | `mark_routine_done` 连续 streak∈{3,7,14,21,30,50,100…} |
+| `idle` | 主动 | `start_idle_speaker` 后台定时，久未动静随口冒泡 |
+| `chat` | 用户主动 | `POST /ai/chat`，带工具能力（可派任务，见上） |
 
 #### 待接入触发点（后续逐步实现）
 
-- 任务完成 / 提前完成 / 力竭、常规打卡里程碑（`routers/tasks.py`）
+- `task_start`（已注册，但计时开始无后端 hook，暂未启用）
 - 每日首次打开
 - 更多聊天工具（送 buff、调目标等）——在 `ai_tools.py` 加 handler + `@register_tool` 即可，见上「加一个新指令」
 - Anthropic 协议的 function calling 传输层（目前仅 OpenAI 兼容，Anthropic 自动降级闲聊）
