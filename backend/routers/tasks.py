@@ -20,7 +20,16 @@ from storage.tasks import (
     _read, _write, DATA_DIR, DAILY_TASKS_FILE,
 )
 from storage.config import load_config
-from routers.ai import supervisor_react
+from storage.buff_rewards import (
+    create_buff_reward,
+    mark_buff_reward_revealed,
+    pending_buff_rewards,
+)
+from storage.buff_effects import (
+    apply_active_daily_score_rewards,
+    apply_reward_effect,
+)
+from routers.ai import emit_task_event
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -190,6 +199,13 @@ def add_daily_task(body: DailyTaskCreate, date: str | None = None):
     task = {"id": str(uuid.uuid4()), **body.model_dump(), "done": False, "from_template": False, "run_status": "none"}
     tasks.append(task)
     save_daily_tasks(today, tasks)
+
+    # 搭子反馈：新增任务必反馈（仅今天）。统一走 emit_task_event。
+    if today == _game_today():
+        emit_task_event("created", "kept" if task.get("keep") else "daily",
+                        content=task.get("content", ""),
+                        hours=task.get("hours", 0))
+
     return task
 
 @router.put("/daily/{task_id}", response_model=DailyTask)
@@ -268,6 +284,23 @@ def toggle_done(task_id: str, date: str | None = None):
 
         _write(runs_path, runs)
         save_daily_tasks(today, tasks)
+
+        # 搭子反馈：直接勾选完成也触发，仅今天、勾上才发（取消完成不接）。
+        # 完成必反馈（emit_task_event 内 force）。
+        if new_done and today == _game_today():
+            _maybe_create_task_buff_reward(
+                today,
+                tasks[i]["id"],
+                tasks[i].get("content", ""),
+                "kept" if tasks[i].get("keep") else "daily",
+            )
+            apply_active_daily_score_rewards(today)
+            emit_task_event("completed", "kept" if tasks[i].get("keep") else "daily",
+                            content=tasks[i].get("content", ""),
+                            early=False,
+                            minutes=round(tasks[i].get("hours", 1.0) * 60),
+                            score=manual_score)
+
         return tasks[i]
     raise HTTPException(404, "任务不存在")
 
@@ -275,7 +308,21 @@ def toggle_done(task_id: str, date: str | None = None):
 def delete_daily_task(task_id: str, date: str | None = None):
     today = date or _game_today()
     tasks = load_daily_tasks(today)
+    removed = next((t for t in tasks if t["id"] == task_id), None)
     save_daily_tasks(today, [t for t in tasks if t["id"] != task_id])
+
+    # 删任务时一并清掉它的执行记录，避免被删的任务还残留在时间轴/有效时间统计里
+    import os as _os_del
+    runs_path = _os_del.path.join(DATA_DIR, "task_runs.json")
+    runs: list = _read(runs_path, [])
+    filtered = [r for r in runs if r.get("task_id") != task_id]
+    if len(filtered) != len(runs):
+        _write(runs_path, filtered)
+
+    # 搭子反馈：删任务（仅今天）。低概率 + 冷却，避免连删/改错重加刷屏。
+    if removed is not None and today == _game_today():
+        emit_task_event("deleted", "kept" if removed.get("keep") else "daily",
+                        content=removed.get("content", ""))
 
 # ── 赏金任务（新系统）────────────────────────────────────────
 # 内容从历史 task_runs 去重抽取，buff 系统随机分配
@@ -285,6 +332,61 @@ def delete_daily_task(task_id: str, date: str | None = None):
 from storage.buffs import BUFF_TEMPLATES, random_buff
 from datetime import datetime as Datetime, time as Time
 import ai_client
+
+TASK_BUFF_CHANCE = 0.2
+
+
+def _maybe_roll_task_buff() -> dict | None:
+    if random.random() >= TASK_BUFF_CHANCE:
+        return None
+    return random_buff()
+
+
+def _create_and_apply_buff_reward(
+    date: str,
+    task_id: str,
+    task_content: str,
+    task_type: str,
+    buff: dict,
+) -> dict:
+    normalized_type = task_type if task_type in ("daily", "kept", "routine", "bounty") else "daily"
+    reward = create_buff_reward(
+        date=date,
+        task_id=task_id,
+        task_content=task_content,
+        task_type=normalized_type,
+        buff=buff,
+    )
+    return apply_reward_effect(reward)
+
+
+def _maybe_create_task_buff_reward(date: str, task_id: str, task_content: str, task_type: str) -> dict | None:
+    if task_type == "bounty":
+        return None
+    buff = _maybe_roll_task_buff()
+    if not buff:
+        return None
+    return _create_and_apply_buff_reward(
+        date=date,
+        task_id=task_id,
+        task_content=task_content,
+        task_type=task_type,
+        buff=buff,
+    )
+
+
+def _create_bounty_buff_reward(date: str, bounty_id: str) -> dict | None:
+    data = load_daily_bounties(date)
+    bounty = next((b for b in data.get("bounties", []) if b.get("id") == bounty_id), None)
+    if not bounty or not bounty.get("buff"):
+        return None
+    return _create_and_apply_buff_reward(
+        date=date,
+        task_id=bounty_id,
+        task_content=bounty.get("content", ""),
+        task_type="bounty",
+        buff=bounty["buff"],
+    )
 
 
 def _all_task_contents() -> list[dict]:
@@ -474,6 +576,32 @@ class DailyBountyNew(BaseModel):
     popup_at: str        # ISO datetime，前端据此决定何时弹出
     ai_generated: bool = False  # 标记是否由 AI 生成/筛选
     reason: str = ""     # AI 派发这条任务的理由（搭子口吻，人性化展示）
+
+
+class BuffReward(BaseModel):
+    id: str
+    date: str
+    task_id: str
+    task_content: str
+    task_type: str
+    buff: BountyBuff
+    revealed: bool = False
+    created_at: str = ""
+    revealed_at: str = ""
+
+
+@router.get("/buff-rewards/pending", response_model=list[BuffReward])
+def get_pending_buff_rewards(date: str | None = None):
+    today = date or _game_today()
+    return pending_buff_rewards(today)
+
+
+@router.patch("/buff-rewards/{reward_id}/revealed", response_model=BuffReward)
+def reveal_buff_reward(reward_id: str):
+    reward = mark_buff_reward_revealed(reward_id)
+    if reward is None:
+        raise HTTPException(404, "Buff 奖励不存在")
+    return reward
 
 
 @router.get("/bounty/daily", response_model=list[DailyBountyNew])
@@ -724,26 +852,43 @@ def save_run_result(body: TaskRunResult):
     runs.append(record)
     _write(path, runs)
     save_daily_tasks(body.date, tasks)
+    actual_score = breakdown.total
 
-    # 搭子反馈：完成 / 中断·力竭（仅今天的计时任务，按概率+冷却，不频繁）
+    # 搭子反馈：完成（必反馈）/ 中断·力竭（按概率+冷却，不频繁）。
+    # 任务类型由 source 推断：bounty=赏金，否则看任务自身 keep（保留/日常）。
     if body.date == _game_today():
-        mins = round(body.actual_seconds / 60)
+        if body.source == "bounty":
+            ttype = "bounty"
+        else:
+            kept = any(t["id"] == body.task_id and t.get("keep") for t in tasks)
+            ttype = "kept" if kept else "daily"
         if body.success:
-            supervisor_react("task_done", {
-                "content": body.task_content,
-                "early": body.end_reason == "early",
-                "minutes": mins,
-                "score": breakdown.total,
-            })
+            if ttype == "bounty":
+                _create_bounty_buff_reward(body.date, body.task_id)
+            else:
+                _maybe_create_task_buff_reward(body.date, body.task_id, body.task_content, ttype)
+            apply_active_daily_score_rewards(body.date)
+            saved_runs: list = _read(path, [])
+            saved = next((
+                r for r in reversed(saved_runs)
+                if r.get("task_id") == body.task_id
+                and r.get("date") == body.date
+                and r.get("started_at") == body.started_at
+            ), record)
+            actual_score = int(saved.get("score", breakdown.total) or 0)
+            emit_task_event("completed", ttype,
+                            content=body.task_content,
+                            early=body.end_reason == "early",
+                            minutes=round(body.actual_seconds / 60),
+                            score=actual_score)
         elif body.end_reason in ("giveup", "failed"):
             pct = min(99, round(body.actual_seconds / max(body.task_hours * 3600, 1) * 100))
-            supervisor_react("task_failed", {
-                "content": body.task_content,
-                "reason": body.end_reason,
-                "percent": pct,
-            })
+            emit_task_event("interrupted" if body.end_reason == "giveup" else "failed",
+                            ttype,
+                            content=body.task_content,
+                            percent=pct)
 
-    return RunSaveResponse(score=breakdown.total, score_breakdown=breakdown)
+    return RunSaveResponse(score=actual_score, score_breakdown=breakdown)
 
 class RunTimeUpdate(BaseModel):
     task_id: str
@@ -843,9 +988,8 @@ def _count_fail_days(routine: dict, max_days: int = 365) -> int:
     规则：
     - 完成日（log 为 True）→ 终止连续失败统计
     - 请假日（excused 中有记录）→ 跳过，不计入失败、也不终止
-    - 尚未结算的日（log/excused 都没有）→ 也跳过，等用户在弹窗里结算后才计入
-      （避免「几天没开 app」被直接判失败）
-    - 明确中断日（log 为 False）→ 计入连续失败
+    - 其余（明确中断 log=False，或没打卡也没请假）→ 都计入连续失败
+      （没点就是没坚持。「放假/没开 app」那种由学习时长弹窗整段裁定为请假来桥接）
     """
     if routine.get("completed"):
         return 0
@@ -863,9 +1007,7 @@ def _count_fail_days(routine: dict, max_days: int = 365) -> int:
             break
         if ds in excused:
             continue          # 请假日：桥接，不计失败
-        if ds not in log:
-            continue          # 未结算：暂不计失败，等用户结算
-        consecutive_fails += 1  # log[ds] is False：明确中断，计入失败
+        consecutive_fails += 1  # 中断 或 没打卡 → 都计入连续失败
     return consecutive_fails
 
 
@@ -1020,6 +1162,50 @@ def get_pending_settlement():
     return result
 
 
+def _settle_routines_for_range(start: str, end: str, decision: str, reason: str) -> None:
+    """
+    对 [start, end] 区间内、每个常规任务**未结算**的日子统一处理，跟学习时长裁定走同一决定：
+      - skip  → excused（请假，桥接连续，不计入失败）
+      - count → missed（中断，log=False，计入连续失败，可能触发归档）
+
+    只动「既没打卡也没请假」的未结算日；已打卡/已请假的不覆盖。无需逐天确认——
+    用户在学习时长弹窗里选的整段决定，常规任务一并套用。
+    """
+    data = load_routines()
+    fl = data["fail_days_limit"]
+    s = Date.fromisoformat(start)
+    e = Date.fromisoformat(end)
+    changed = False
+    for r in data["routines"]:
+        if r.get("completed"):
+            continue
+        log: dict = r.setdefault("log", {})
+        excused: dict = r.setdefault("excused", {})
+        created = Date.fromisoformat(r.get("created_date", start))
+        d = s
+        while d <= e:
+            ds = str(d)
+            # 创建日之前、或已结算（打卡/请假）的日子不动
+            if d >= created and ds not in log and ds not in excused:
+                if decision == "skip":
+                    excused[ds] = reason or ""
+                else:  # count
+                    log[ds] = False
+                changed = True
+            d += timedelta(days=1)
+        _recalc_streak(r)
+
+    if not changed:
+        return
+
+    # 算中断可能让某些任务连续失败超限 → 归档
+    for r in list(data["routines"]):
+        if not r.get("completed") and _count_fail_days(r) >= fl:
+            save_routines(data)
+            _archive_routine(r, "failed", data)
+    save_routines(data)
+
+
 @router.post("/routines/{routine_id}/settle", response_model=RoutineTask)
 def settle_routine(routine_id: str, items: list[RoutineSettleItem]):
     """对某常规任务的若干历史日期进行结算（请假 / 中断）。"""
@@ -1074,14 +1260,25 @@ def create_routine(body: RoutineCreate):
     }
     data["routines"].append(routine)
     save_routines(data)
+
+    # 搭子反馈：新增常规习惯必反馈
+    emit_task_event("created", "routine",
+                    content=routine.get("content", ""),
+                    hours=routine.get("hours", 0))
+
     return _routine_to_model(routine, data["fail_days_limit"])
 
 
 @router.delete("/routines/{routine_id}", status_code=204)
 def delete_routine(routine_id: str):
     data = load_routines()
+    removed = next((r for r in data["routines"] if r["id"] == routine_id), None)
     data["routines"] = [r for r in data["routines"] if r["id"] != routine_id]
     save_routines(data)
+
+    # 搭子反馈：删常规习惯（低概率 + 冷却）
+    if removed is not None:
+        emit_task_event("deleted", "routine", content=removed.get("content", ""))
 
 
 def _recalc_streak(r: dict) -> None:
@@ -1142,16 +1339,6 @@ def mark_routine_done(routine_id: str, date: str | None = None):
         _recalc_streak(r)
         r["completed"] = r["total_done"] >= r["target_days"]
 
-        # 达成目标后自动归档为 completed
-        if r["completed"] and new_val:
-            save_routines(data)
-            _archive_routine(r, "completed", data)
-            save_routines(data)
-            # 返回归档前的最终状态给前端展示
-            r["fail_days"] = 0
-            r["force_warning"] = False
-            return r
-
         save_routines(data)
 
         # 非今日日期（如结算流程）只更新 streak，不写 task_run
@@ -1170,6 +1357,21 @@ def mark_routine_done(routine_id: str, date: str | None = None):
                 # 时长为 0 的习惯不写执行记录，不显示在时间轴
                 if secs == 0:
                     _write(runs_path, runs)
+                    _maybe_create_task_buff_reward(
+                        today,
+                        routine_id,
+                        r.get("content", ""),
+                        "routine",
+                    )
+                    emit_task_event("completed", "routine",
+                                    content=r.get("content", ""),
+                                    streak=r.get("streak", 0))
+                    if r["completed"]:
+                        _archive_routine(r, "completed", data)
+                        save_routines(data)
+                        r["fail_days"] = 0
+                        r["force_warning"] = False
+                        return r
                     return _routine_to_model(r, fl)
                 now = _Datetime.now()
                 started = (now - timedelta(seconds=secs)).isoformat()
@@ -1200,15 +1402,26 @@ def mark_routine_done(routine_id: str, date: str | None = None):
                     "score": routine_score,
                 })
             _write(runs_path, runs)
-
-            # 搭子反馈：常规打卡到达连续里程碑（3/7/14/21/30/50/100…）才说话
             if new_val:
-                streak = r.get("streak", 0)
-                if streak in (3, 7, 14, 21, 30, 50, 100) or (streak >= 100 and streak % 50 == 0):
-                    supervisor_react("routine_milestone", {
-                        "content": r.get("content", ""),
-                        "streak": streak,
-                    })
+                _maybe_create_task_buff_reward(
+                    today,
+                    routine_id,
+                    r.get("content", ""),
+                    "routine",
+                )
+                apply_active_daily_score_rewards(today)
+                emit_task_event("completed", "routine",
+                                content=r.get("content", ""),
+                                streak=r.get("streak", 0))
+
+        # 达成目标后自动归档为 completed
+        if r["completed"] and new_val:
+            _archive_routine(r, "completed", data)
+            save_routines(data)
+            # 返回归档前的最终状态给前端展示
+            r["fail_days"] = 0
+            r["force_warning"] = False
+            return r
 
         return _routine_to_model(r, fl)
     raise HTTPException(404, "常规任务不存在")
@@ -1277,40 +1490,100 @@ def _save_goal_state(state: dict) -> None:
     _write(GOAL_STATE_FILE, state)
 
 
-def _settle_yesterday(state: dict, mode: str) -> dict:
-    """结算昨天的达成情况，更新目标和连续计数（每天只结算一次）。"""
+def _settle_hit(state: dict) -> None:
+    """结算一个达标日：连续达标 +1，目标上升。"""
+    state["consecutive_hits"] += 1
+    state["consecutive_fails"] = 0
+    state["goal_secs"] = state["goal_secs"] + state["step_mins"] * 60
+
+
+def _settle_fail(state: dict) -> None:
+    """结算一个未达标日：连续失败 +1，到阈值则降级。"""
+    state["consecutive_hits"] = 0
+    state["consecutive_fails"] += 1
+    if state["consecutive_fails"] >= state["fail_limit"]:
+        degrade = state["degrade_mins"] * 60
+        min_goal = state["min_goal_mins"] * 60
+        state["goal_secs"] = max(min_goal, state["goal_secs"] - degrade)
+        state["consecutive_fails"] = 0
+
+
+def _gap_start(state: dict) -> Date:
+    """待结算区间的起点（上次结算日的次日；没结算过则取昨天）。"""
     today = _game_today()
-    yesterday = str(Date.fromisoformat(today) - timedelta(days=1))
+    last = state.get("last_checked_date") or ""
+    if last:
+        return Date.fromisoformat(last) + timedelta(days=1)
+    return Date.fromisoformat(today) - timedelta(days=1)
+
+
+def _pending_gap(state: dict, mode: str) -> dict | None:
+    """
+    返回**整段待裁定区间**（不修改 state），没有则 None。
+
+    从上次结算日的次日推进到昨天：达标日自动算掉、不计入区间。一旦遇到第一个
+    **未达标日（含时长为 0 / 没开 app）**，从这天到昨天就是一整段「需要裁定」的
+    区间——一次弹窗、一个理由、整段一起跳过或整段算中断。
+
+    没开 app 的日子天然落在这段里（它就是 0），不需要单独排除。
+    """
+    today = Date.fromisoformat(_game_today())
+    end = today - timedelta(days=1)  # 到昨天为止
+    d = _gap_start(state)
+
+    # 跳过开头连续的达标日（这些会被 _settle_yesterday 自动结算掉）
+    while d <= end:
+        actual = _calc_effective_secs(_get_runs_for_date(str(d)), mode)
+        if actual >= state["goal_secs"]:
+            d += timedelta(days=1)
+            continue
+        break
+    else:
+        return None  # 区间内全达标 / 空区间
+
+    # d 是第一个未达标日；[d, end] 就是整段待裁定
+    block_start, block_end = d, end
+    days = (block_end - block_start).days + 1
+    total = sum(
+        _calc_effective_secs(_get_runs_for_date(str(block_start + timedelta(days=i))), mode)
+        for i in range(days)
+    )
+    return {
+        "start": str(block_start),
+        "end": str(block_end),
+        "days": days,
+        "total_effective_secs": total,
+        "goal_secs": state["goal_secs"],
+    }
+
+
+def _settle_yesterday(state: dict, mode: str) -> dict:
+    """
+    自动结算「上次结算日 → 昨天」里开头**连续达标**的日子；遇到第一个未达标日就停下，
+    把整段 [未达标日 … 昨天] 留给用户在弹窗里一次性裁定（跳过 / 算中断）。
+
+    达标日：连续达标 +1、目标上升、推进 last_checked_date。
+    第一个未达标日（含 0 / 没开 app）：停在它前一天，等 settle_gap 处理整段。
+    """
+    today = _game_today()
     if state.get("last_checked_date") == today:
         return state  # 今天已结算过
 
-    excluded = load_excluded_dates()
-    if yesterday in excluded:
-        # 排除天：不计入，不改变目标，只更新日期
-        state["last_checked_date"] = today
-        return state
+    end = Date.fromisoformat(today) - timedelta(days=1)
+    d = _gap_start(state)
 
-    runs = _get_runs_for_date(yesterday)
-    actual = _calc_effective_secs(runs, mode)
-    goal = state["goal_secs"]
+    while d <= end:
+        actual = _calc_effective_secs(_get_runs_for_date(str(d)), mode)
+        if actual >= state["goal_secs"]:
+            _settle_hit(state)
+            state["last_checked_date"] = str(d)
+            d += timedelta(days=1)
+        else:
+            # 第一个未达标日 → 停在它前面，整段交给用户裁定
+            state["last_checked_date"] = str(d - timedelta(days=1))
+            return state
 
-    if actual >= goal:
-        # 达标：连续命中+1，重置失败计数，目标上升
-        state["consecutive_hits"] += 1
-        state["consecutive_fails"] = 0
-        step = state["step_mins"] * 60
-        state["goal_secs"] = goal + step
-    else:
-        # 未达标：连续失败+1，重置命中计数
-        state["consecutive_hits"] = 0
-        state["consecutive_fails"] += 1
-        if state["consecutive_fails"] >= state["fail_limit"]:
-            # 降级
-            degrade = state["degrade_mins"] * 60
-            min_goal = state["min_goal_mins"] * 60
-            state["goal_secs"] = max(min_goal, goal - degrade)
-            state["consecutive_fails"] = 0  # 降级后重置，避免持续降
-
+    # 区间内全达标（或本就无区间）
     state["last_checked_date"] = today
     return state
 
@@ -1353,6 +1626,62 @@ def get_daily_stats(date: str | None = None):
     mode = cfg.get("effective_time_mode", "actual")
     excluded = load_excluded_dates()
     return _make_daily_stats(today, excluded, mode)
+
+
+class BestRecord(BaseModel):
+    value: int       # 最佳数值（专注秒数 / 星星数）
+    date: str        # 发生在哪一天（空串=暂无记录）
+
+
+@router.get("/best-records")
+def get_best_records():
+    """
+    历史最佳记录：
+      - best_focus：单日有效专注时长的历史最高（按当前口径），及发生日期。
+      - best_stars：单日「今日获得」星星历史最高（= 完成任务得分 + 当天赢麻了星星，
+        与主页星星墙口径一致），及发生日期。
+    用于在目标卡 / 主页星星墙展示「历史最佳，发生于 X」。
+    """
+    import os as _os_b
+    cfg = load_config()
+    mode = cfg.get("effective_time_mode", "actual")
+
+    # 单日专注最高
+    runs: list = _read(_os_b.path.join(DATA_DIR, "task_runs.json"), [])
+    focus_per_day: dict[str, int] = {}
+    score_per_day: dict[str, int] = {}
+    for r in runs:
+        d = r.get("date", "")
+        if not d:
+            continue
+        if r.get("success"):
+            score_per_day[d] = score_per_day.get(d, 0) + (r.get("score", 0) or 0)
+        if r.get("success") and r.get("started_at"):
+            secs = r.get("actual_seconds", 0) or 0
+            planned = int(r.get("task_hours", 1.0) * 3600)
+            val = min(secs, planned) if mode == "planned" else secs
+            if not r.get("count_in_effective", True):
+                val = 0
+            focus_per_day[d] = focus_per_day.get(d, 0) + val
+    best_focus = BestRecord(value=0, date="")
+    if focus_per_day:
+        bd = max(focus_per_day, key=lambda k: focus_per_day[k])
+        best_focus = BestRecord(value=focus_per_day[bd], date=bd)
+
+    # 单日「今日获得」星星最高 = 任务得分 + 赢麻了星星（与主页口径一致）
+    from storage.records import load_wins
+    stars_per_day: dict[str, int] = dict(score_per_day)
+    for w in load_wins():
+        d = w.get("created_at", "")[:10]
+        if not d:
+            continue
+        stars_per_day[d] = stars_per_day.get(d, 0) + (w.get("stars", 0) or 0)
+    best_stars = BestRecord(value=0, date="")
+    if stars_per_day:
+        bd = max(stars_per_day, key=lambda k: stars_per_day[k])
+        best_stars = BestRecord(value=stars_per_day[bd], date=bd)
+
+    return {"best_focus": best_focus, "best_stars": best_stars}
 
 
 class ExcludeBody(BaseModel):
@@ -1418,6 +1747,72 @@ def get_daily_goal():
         degrade_mins=state["degrade_mins"],
         mode=mode,
     )
+
+
+class PendingGap(BaseModel):
+    start: str                  # 待裁定区间起点（第一个未达标日）
+    end: str                    # 区间终点（昨天）
+    days: int                   # 区间天数
+    total_effective_secs: int   # 区间内累计有效时间
+    goal_secs: int              # 当时的目标
+
+
+@router.get("/goal/pending-gap", response_model=PendingGap | None)
+def get_pending_gap():
+    """
+    返回需要用户一次性裁定的**整段区间**——从上次结算后第一个未达标日到昨天。
+    没有则返回 null（达标正常推进、或第二天正常打开）。
+
+    用户重开 app 时前端拉这个：有则**一个弹窗**问整段是「跳过（有事/状态不好，
+    不计入）」还是「算中断（整段按未达标计）」。没开 app 的日子天然在这段里。
+    """
+    cfg = load_config()
+    mode = cfg.get("effective_time_mode", "actual")
+    state = _load_goal_state()
+    gap = _pending_gap(state, mode)
+    return PendingGap(**gap) if gap else None
+
+
+class SettleGapBody(BaseModel):
+    decision: Literal["skip", "count"]   # skip=整段不计入 / count=整段算未达标
+    reason: str = ""
+
+
+@router.post("/goal/settle-gap")
+def settle_gap(body: SettleGapBody):
+    """
+    对**整段待裁定区间**一次性裁定：
+      - skip：整段跳过——每天写入 excluded_dates（带同一理由），不计入目标升降。
+      - count：整段算中断——每天按未达标结算（连续失败累加，可能触发降级）。
+    裁定后 last_checked_date 推进到昨天，目标卡片随即正常。
+    """
+    cfg = load_config()
+    mode = cfg.get("effective_time_mode", "actual")
+    state = _load_goal_state()
+    gap = _pending_gap(state, mode)
+    if not gap:
+        return {"ok": True}  # 没有待裁定区间，幂等返回
+
+    start = Date.fromisoformat(gap["start"])
+    end = Date.fromisoformat(gap["end"])
+    days = (end - start).days + 1
+
+    if body.decision == "skip":
+        excluded = load_excluded_dates()
+        for i in range(days):
+            excluded[str(start + timedelta(days=i))] = body.reason or "状态不在线"
+        save_excluded_dates(excluded)
+    else:  # count：整段每天计未达标
+        for _ in range(days):
+            _settle_fail(state)
+
+    # 整段处理完，推进到昨天
+    state["last_checked_date"] = str(end)
+    _save_goal_state(state)
+
+    # 常规任务一并套用同一决定（跳过=请假桥接 / 算中断=计失败），不再单独弹窗
+    _settle_routines_for_range(gap["start"], gap["end"], body.decision, body.reason)
+    return {"ok": True}
 
 
 class GoalSettings(BaseModel):

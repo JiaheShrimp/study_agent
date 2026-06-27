@@ -217,14 +217,16 @@ export function SlotMachine({ onComplete, onSkip }: Props) {
     setSaving(true)
     const today = gameToday()
     const bonus: DailyBonus = { date: today, rolls, multiplier }
+    let savedBonus = bonus
     try {
-      await api.bonus.save(bonus)
+      savedBonus = await api.bonus.save(bonus)
+      setRolls(savedBonus.rolls)
     } catch {
       // 保存失败忽略，下次打开会重新抽一次
     } finally {
       setSaving(false)
     }
-    onComplete(bonus)
+    onComplete(savedBonus)
   }
 
   const label =

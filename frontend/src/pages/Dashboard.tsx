@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
-import { api, type DailyBonus } from '@/lib/api'
+import { api, type DailyBonus, type BestRecord } from '@/lib/api'
+import { gameToday } from '@/lib/utils'
 import { DayTimeline } from '@/components/DayTimeline'
 import { StudyGoalCard } from '@/components/StudyGoalCard'
 import { StarWall } from '@/components/StarWall'
@@ -15,9 +16,22 @@ function greeting() {
 
 export function Dashboard({ bonus }: { bonus: DailyBonus | null }) {
   const [totalScore, setTotalScore] = useState<number | null>(null)
+  const [bestStars, setBestStars] = useState<BestRecord | null>(null)
 
   useEffect(() => {
-    api.tasks.dailyScore().then(r => setTotalScore(r.total_score)).catch(() => setTotalScore(0))
+    // 主页「今日获得」= 完成任务得分 + 今天赢麻了的星星数
+    function load() {
+      const today = gameToday()
+      Promise.all([
+        api.tasks.dailyScore().then(r => r.total_score).catch(() => 0),
+        api.wins.forDate(today).then(ws => ws.reduce((s, w) => s + w.stars, 0)).catch(() => 0),
+      ]).then(([taskScore, winStars]) => setTotalScore(taskScore + winStars))
+      api.study.bestRecords().then(b => setBestStars(b.best_stars)).catch(() => {})
+    }
+    load()
+    // 记赢麻了 / 完成任务后会派发该事件 → 重新统计今日获得
+    window.addEventListener('agent:dialogue-refresh', load)
+    return () => window.removeEventListener('agent:dialogue-refresh', load)
   }, [])
 
   return (
@@ -45,6 +59,9 @@ export function Dashboard({ bonus }: { bonus: DailyBonus | null }) {
             <p className="text-2xl font-black text-amber-600 leading-tight">
               {bonus.multiplier.toFixed(1)}<span className="text-base font-bold text-amber-500 ml-0.5">×</span>
             </p>
+            {!!bonus.dice_bonus && (
+              <p className="text-xs font-medium text-amber-700 mt-1">幸运加注：骰子 +{bonus.dice_bonus}</p>
+            )}
           </div>
           <p className="text-xs text-amber-600/70 text-right max-w-[80px]">
             {bonus.multiplier >= 2.5 ? '🔥 大爆发日' :
@@ -67,7 +84,7 @@ export function Dashboard({ bonus }: { bonus: DailyBonus | null }) {
       <DayTimeline />
 
       {/* 今日星星 */}
-      {totalScore !== null && totalScore > 0 && <StarWall count={totalScore} />}
+      {totalScore !== null && totalScore > 0 && <StarWall count={totalScore} best={bestStars ?? undefined} />}
     </div>
   )
 }

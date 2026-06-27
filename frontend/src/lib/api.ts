@@ -25,6 +25,7 @@ export interface Winnable {
   best_streak: number
   last_win_date: string | null
   won_today: boolean
+  last_roll_level?: Win['win_level'] | null  // 本次「赢一次」系统抽到的程度
 }
 
 export interface ArchivedWinnable {
@@ -103,6 +104,24 @@ export interface GoalSettings {
   goal_mins: number          // 重置/修改当前目标（分钟）
 }
 
+export interface BestRecord {
+  value: number   // 最佳数值（专注秒数 / 星星数）
+  date: string    // 发生在哪一天（空串=暂无）
+}
+
+export interface BestRecords {
+  best_focus: BestRecord
+  best_stars: BestRecord
+}
+
+export interface PendingGap {
+  start: string                  // 待裁定区间起点（第一个未达标日）
+  end: string                    // 区间终点（昨天）
+  days: number                   // 区间天数
+  total_effective_secs: number   // 区间内累计有效时间
+  goal_secs: number              // 当时的目标（秒）
+}
+
 export interface RoutineTask {
   id: string
   content: string
@@ -170,6 +189,7 @@ export interface DailyBonus {
   date: string
   rolls: number[]
   multiplier: number  // 1.0-3.0，一位小数
+  dice_bonus?: number
 }
 
 export interface TaskTemplate {
@@ -213,6 +233,18 @@ export interface DailyBounty {
   reason?: string    // AI 派发这条任务的理由（搭子口吻）
 }
 
+export interface BuffReward {
+  id: string
+  date: string
+  task_id: string
+  task_content: string
+  task_type: 'daily' | 'kept' | 'routine' | string
+  buff: BountyBuff
+  revealed: boolean
+  created_at: string
+  revealed_at: string
+}
+
 export interface AIProviderMeta {
   id: string
   label: string
@@ -225,6 +257,7 @@ export interface AIStatus {
   available: boolean
   provider: string
   key_set: boolean
+  key_mask: string
   model: string
   custom_base_url: string
   providers: AIProviderMeta[]
@@ -265,6 +298,9 @@ export const api = {
       post<DailyBounty>(`/tasks/bounty/daily/${id}?status=${status}`, {}, 'PATCH'),
     completeBounty: (id: string) =>
       post<DailyBounty>(`/tasks/bounty/daily/${id}/done`, {}, 'PATCH'),
+    pendingBuffRewards: () => get<BuffReward[]>('/tasks/buff-rewards/pending'),
+    revealBuffReward: (id: string) =>
+      post<BuffReward>(`/tasks/buff-rewards/${id}/revealed`, {}, 'PATCH'),
     saveRun: (r: {
       task_id: string; task_content: string; date: string; success: boolean
       started_at: string; ended_at: string
@@ -314,9 +350,15 @@ export const api = {
       get<DailyStats>(`/tasks/daily-stats${date ? `?date=${date}` : ''}`),
     setExclude: (reason: string, date?: string) =>
       post<DailyStats>(`/tasks/daily-stats/exclude${date ? `?date=${date}` : ''}`, { reason }),
+    bestRecords: () => get<BestRecords>('/tasks/best-records'),
     goal: () => get<GoalResult>('/tasks/goal'),
     updateGoalSettings: (s: GoalSettings) =>
       post<GoalResult>('/tasks/goal/settings', s, 'PUT'),
+    // 整段待裁定区间：系统监测、用户对整段一次决定「跳过 / 算中断」
+    pendingGap: () =>
+      get<PendingGap | null>('/tasks/goal/pending-gap'),
+    settleGap: (decision: 'skip' | 'count', reason: string) =>
+      post<{ ok: boolean }>('/tasks/goal/settle-gap', { decision, reason }),
   },
   routines: {
     get: () => get<RoutinesData>('/tasks/routines'),
@@ -337,8 +379,9 @@ export const api = {
     list: () => get<Win[]>('/wins/'),
     byDate: () => get<Record<string, Win[]>>('/wins/by-date'),
     forDate: (day: string) => get<Win[]>(`/wins/date/${day}`),
-    create: (content: string, win_level: Win['win_level']) =>
-      post<Win>('/wins/', { content, win_level }),
+    // 程度（星星=奖励值）由系统随机抽取，前端不再传 win_level
+    create: (content: string) =>
+      post<Win>('/wins/', { content }),
     stats: (start?: string, end?: string) => {
       const params = new URLSearchParams()
       if (start) params.set('start', start)
@@ -348,8 +391,9 @@ export const api = {
     delete: (id: string) => del(`/wins/${id}`),
     // 可赢目标：挂在页面上的「未来可赢」，点一下赢一次
     winnables: () => get<Winnable[]>('/wins/winnables'),
-    createWinnable: (content: string, win_level: WinnableLevel) =>
-      post<Winnable>('/wins/winnables', { content, win_level }),
+    // 可赢目标不再带固定星级；每次「赢一次」程度由系统随机抽取
+    createWinnable: (content: string) =>
+      post<Winnable>('/wins/winnables', { content }),
     winWinnable: (id: string) => post<Winnable>(`/wins/winnables/${id}/win`, {}),
     archiveWinnable: (id: string) => post<ArchivedWinnable>(`/wins/winnables/${id}/archive`, {}),
     archivedWinnables: () => get<ArchivedWinnable[]>('/wins/winnables/archived'),

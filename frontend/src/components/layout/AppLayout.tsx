@@ -3,6 +3,7 @@ import { Sidebar } from './Sidebar'
 import { BottomNav } from './BottomNav'
 import { ChatSidebar } from '@/components/ChatSidebar'
 import { BountyPopup } from '@/components/BountyPopup'
+import { BuffRewardPopup } from '@/components/BuffRewardPopup'
 import { type DailyBonus } from '@/lib/api'
 
 interface Props {
@@ -18,6 +19,11 @@ export function AppLayout({ bonus }: Props) {
           <span className="text-sm">🎰</span>
           今日倍数
           <span className="font-black text-base text-amber-600">{bonus.multiplier.toFixed(1)}×</span>
+          {!!bonus.dice_bonus && (
+            <span className="rounded-full bg-white/70 px-2 py-0.5 text-[11px] text-amber-700">
+              骰子 +{bonus.dice_bonus}
+            </span>
+          )}
         </div>
       )}
 
@@ -33,6 +39,7 @@ export function AppLayout({ bonus }: Props) {
 
       {/* 全局赏金弹窗：随机/搭子派的赏金在任意页面都能弹出 */}
       <BountyPopup />
+      <BuffRewardPopup />
     </div>
   )
 }

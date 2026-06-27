@@ -71,6 +71,8 @@ BUFF_TEMPLATES: list[dict[str, Any]] = [
 ]
 
 BUFF_MAP: dict[str, dict] = {b["id"]: b for b in BUFF_TEMPLATES}
+ACTIVE_BUFF_TYPES = {"task_score", "daily_score", "lucky_dice"}
+ACTIVE_BUFF_TEMPLATES = [b for b in BUFF_TEMPLATES if b["type"] in ACTIVE_BUFF_TYPES]
 
 
 def get_buff(buff_id: str) -> dict | None:
@@ -91,7 +93,7 @@ _COEF_RANGES: dict[str, tuple[float, float, float]] = {
 
 def random_buff() -> dict:
     import random
-    tpl = random.choice(BUFF_TEMPLATES)
+    tpl = random.choice(ACTIVE_BUFF_TEMPLATES)
     lo, hi, step = _COEF_RANGES[tpl["id"]]
     if step == 0.0:
         coef = lo
