@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { BookOpen, EyeOff, Settings2, X, TrendingUp, Flame, AlertTriangle } from 'lucide-react'
-import { api, type DailyStats, type GoalResult, type GoalSettings } from '@/lib/api'
+import { BookOpen, EyeOff, Settings2, X, TrendingUp, Flame, AlertTriangle, Trophy } from 'lucide-react'
+import { api, type DailyStats, type GoalResult, type GoalSettings, type BestRecords } from '@/lib/api'
 import { cn, gameToday } from '@/lib/utils'
 
 function fmtH(secs: number) {
@@ -9,6 +9,13 @@ function fmtH(secs: number) {
   if (h === 0) return `${m}m`
   if (m === 0) return `${h}h`
   return `${h}h ${m}m`
+}
+
+// 把 YYYY-MM-DD 格式成「6月4日」
+function fmtMD(d: string): string {
+  if (!d) return ''
+  const dt = new Date(d + 'T00:00:00')
+  return `${dt.getMonth() + 1} 月 ${dt.getDate()} 日`
 }
 
 function ProgressBar({ pct, overPct, hit, thin = false }: {
@@ -39,38 +46,22 @@ function ProgressBar({ pct, overPct, hit, thin = false }: {
 // ── 目标参数设置弹窗 ─────────────────────────────────────────
 function GoalSettingsModal({
   goal,
-  onSave,
   onClose,
 }: {
   goal: GoalResult
-  onSave: (s: GoalSettings) => Promise<void>
+  onSave?: (s: GoalSettings) => Promise<void>   // 已固定只读，保留以兼容调用处
   onClose: () => void
 }) {
-  const currentGoalMins = Math.round(goal.goal_secs / 60)
-  const [goalMins,    setGoalMins]    = useState(currentGoalMins)
-  const [stepMins,    setStepMins]    = useState(goal.step_mins)
-  const [failLimit,   setFailLimit]   = useState(goal.fail_limit)
-  const [degradeMins, setDegradeMins] = useState(goal.degrade_mins)
-  const [minGoal,     setMinGoal]     = useState(15)
-  const [saving, setSaving] = useState(false)
+  // 目标与爬坡参数已固定为只读展示，不再可编辑（保留面板让用户知道数值）
+  const goalMins    = Math.round(goal.goal_secs / 60)
+  const stepMins    = goal.step_mins
+  const failLimit   = goal.fail_limit
+  const degradeMins = goal.degrade_mins
+  const minGoal     = 15
 
-  async function save() {
-    setSaving(true)
-    try {
-      await onSave({
-        goal_mins: goalMins,
-        step_mins: stepMins,
-        fail_limit: failLimit,
-        degrade_mins: degradeMins,
-        min_goal_mins: minGoal,
-      })
-    } finally { setSaving(false) }
-  }
-
-  const Row = ({ label, sub, value, onChange, min, max, unit }: {
-    label: string; sub: string
-    value: number; onChange: (v: number) => void
-    min: number; max: number; unit: string
+  // 只读展示行：数值灰底、不可编辑
+  const Row = ({ label, sub, value, unit }: {
+    label: string; sub: string; value: number; unit: string
   }) => (
     <div className="flex items-center justify-between">
       <div>
@@ -78,9 +69,8 @@ function GoalSettingsModal({
         <p className="text-[11px] text-muted-foreground">{sub}</p>
       </div>
       <div className="flex items-center gap-1.5">
-        <input type="number" min={min} max={max}
-          value={value} onChange={e => onChange(Number(e.target.value))}
-          className="w-16 h-8 rounded-lg border border-input bg-background px-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-ring/40"
+        <input type="number" value={value} readOnly disabled
+          className="w-16 h-8 rounded-lg border border-input bg-secondary/60 px-2 text-sm text-center text-muted-foreground cursor-not-allowed focus:outline-none"
         />
         <span className="text-xs text-muted-foreground">{unit}</span>
       </div>
@@ -96,7 +86,7 @@ function GoalSettingsModal({
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-base font-semibold">目标设置</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">修改当前目标或爬坡参数</p>
+              <p className="text-xs text-muted-foreground mt-0.5">当前目标与爬坡参数</p>
             </div>
             <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
               <X className="h-4 w-4" />
@@ -104,85 +94,27 @@ function GoalSettingsModal({
           </div>
 
           <div className="space-y-4">
-            <Row label="当前目标" sub="直接修改今日起的目标时长"
-              value={goalMins} onChange={setGoalMins} min={5} max={720} unit="分钟" />
+            <Row label="当前目标" sub="今日起的目标时长"
+              value={goalMins} unit="分钟" />
             <div className="h-px bg-border" />
             <Row label="每日递增" sub="达标后次日增加的分钟数"
-              value={stepMins} onChange={setStepMins} min={1} max={60} unit="分钟" />
+              value={stepMins} unit="分钟" />
             <Row label="连续未达标降级" sub="连续几天未达标触发降级"
-              value={failLimit} onChange={setFailLimit} min={1} max={14} unit="天" />
+              value={failLimit} unit="天" />
             <Row label="降级幅度" sub="触发降级时减少的分钟数"
-              value={degradeMins} onChange={setDegradeMins} min={1} max={120} unit="分钟" />
+              value={degradeMins} unit="分钟" />
             <Row label="目标下限" sub="降级不会低于此值"
-              value={minGoal} onChange={setMinGoal} min={5} max={120} unit="分钟" />
+              value={minGoal} unit="分钟" />
           </div>
 
           <div className="rounded-xl bg-secondary/50 px-3 py-2 text-[11px] text-muted-foreground">
             达标 → 次日 +{stepMins}m · 连续 {failLimit} 天未达标 → -{degradeMins}m（最低 {minGoal}m）
           </div>
 
-          <div className="flex gap-2">
-            <button onClick={onClose}
-              className="flex-1 h-9 rounded-2xl border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">
-              取消
-            </button>
-            <button onClick={save} disabled={saving}
-              className="flex-1 h-9 rounded-2xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
-              {saving ? '保存中…' : '保存'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── 排除理由弹窗 ─────────────────────────────────────────────
-function ExcludeReasonModal({
-  onConfirm,
-  onCancel,
-}: {
-  onConfirm: (reason: string) => void
-  onCancel: () => void
-}) {
-  const [reason, setReason] = useState('')
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-foreground/15 backdrop-blur-sm" onClick={onCancel} />
-      <div className="relative z-10 w-80 bg-card rounded-3xl border border-border shadow-2xl overflow-hidden">
-        <div className="h-1 bg-gradient-to-r from-slate-300 to-slate-400" />
-        <div className="p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-base font-semibold">今天不计入统计</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">此天不影响目标的升降计算</p>
-            </div>
-            <button onClick={onCancel} className="text-muted-foreground hover:text-foreground">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1.5 block">理由（必填）</label>
-            <input
-              autoFocus
-              value={reason}
-              onChange={e => setReason(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && reason.trim()) onConfirm(reason.trim()) }}
-              placeholder="如：出去旅游、身体不适、节假日…"
-              className="w-full h-9 rounded-xl border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
-            />
-          </div>
-          <div className="flex gap-2">
-            <button onClick={onCancel}
-              className="flex-1 h-9 rounded-2xl border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">
-              取消
-            </button>
-            <button onClick={() => reason.trim() && onConfirm(reason.trim())}
-              disabled={!reason.trim()}
-              className="flex-1 h-9 rounded-2xl bg-foreground text-background text-sm font-medium hover:bg-foreground/90 transition-colors disabled:opacity-40">
-              确认排除
-            </button>
-          </div>
+          <button onClick={onClose}
+            className="w-full h-9 rounded-2xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+            知道了
+          </button>
         </div>
       </div>
     </div>
@@ -204,14 +136,14 @@ export function StudyGoalCard({ date, compact = false, refreshKey }: Props) {
 
   const [stats, setStats]   = useState<DailyStats | null>(null)
   const [goal, setGoal]     = useState<GoalResult | null>(null)
+  const [best, setBest]     = useState<BestRecords | null>(null)
   const [settingsModal, setSettingsModal] = useState(false)
-  const [excludeModal, setExcludeModal]  = useState(false)
   const [modeOpen, setModeOpen] = useState(false)
-  const [saving, setSaving] = useState(false)
 
   function loadData() {
     api.study.dailyStats(today).then(setStats).catch(() => {})
     api.study.goal().then(setGoal).catch(() => {})  // 目标始终加载（今日爬坡状态）
+    api.study.bestRecords().then(setBest).catch(() => {})  // 历史最佳专注
   }
   useEffect(() => { loadData() }, [today, refreshKey])
 
@@ -225,16 +157,6 @@ export function StudyGoalCard({ date, compact = false, refreshKey }: Props) {
   const pct = Math.min(100, rawPct)           // 进度条基础宽度（不超100%）
   const overPct = Math.max(0, rawPct - 100)   // 超额部分百分比
 
-  async function handleExcludeConfirm(reason: string) {
-    setSaving(true)
-    try { const s = await api.study.setExclude(reason, today); setStats(s) }
-    finally { setSaving(false); setExcludeModal(false) }
-  }
-  async function handleCancelExclude() {
-    setSaving(true)
-    try { const s = await api.study.setExclude('__cancel__', today); setStats(s) }
-    finally { setSaving(false) }
-  }
   async function switchMode(m: string) {
     await api.effectiveTimeMode.update(m)
     loadData()
@@ -313,23 +235,12 @@ export function StudyGoalCard({ date, compact = false, refreshKey }: Props) {
                 <Settings2 className="h-3.5 w-3.5" />
               </button>
             )}
-            {isToday ? (
-              stats.excluded ? (
-                <button onClick={handleCancelExclude} disabled={saving}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border border-primary/30 text-primary bg-primary/5 hover:bg-primary/10 transition-colors">
-                  <EyeOff className="h-3.5 w-3.5" /> 恢复计入
-                </button>
-              ) : (
-                <button onClick={() => setExcludeModal(true)} disabled={saving}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border border-border text-muted-foreground hover:bg-secondary transition-colors">
-                  <EyeOff className="h-3.5 w-3.5" /> 今天不计入
-                </button>
-              )
-            ) : stats.excluded ? (
+            {/* 不计入不再手动勾选——由系统监测偏低日、弹窗裁定。这里只展示已排除状态 */}
+            {stats.excluded && (
               <span className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-xl border border-border text-muted-foreground bg-secondary/50">
                 <EyeOff className="h-3.5 w-3.5" />{stats.exclude_reason || '已排除'}
               </span>
-            ) : null}
+            )}
           </div>
         </div>
 
@@ -417,24 +328,21 @@ export function StudyGoalCard({ date, compact = false, refreshKey }: Props) {
             )}
           </div>
         )}
+
+        {/* 历史最佳专注 */}
+        {best && best.best_focus.value > 0 && (
+          <div className="flex items-center gap-1.5 text-[11px] text-amber-600 pt-0.5">
+            <Trophy className="h-3 w-3 shrink-0" />
+            历史最佳单日专注 <span className="font-semibold">{fmtH(best.best_focus.value)}</span>
+            <span className="text-muted-foreground">· {fmtMD(best.best_focus.date)}</span>
+          </div>
+        )}
       </div>
 
       {settingsModal && goal && (
         <GoalSettingsModal
           goal={goal}
-          onSave={async s => {
-            const updated = await api.study.updateGoalSettings(s)
-            setGoal(updated)
-            setSettingsModal(false)
-          }}
           onClose={() => setSettingsModal(false)}
-        />
-      )}
-
-      {excludeModal && (
-        <ExcludeReasonModal
-          onConfirm={handleExcludeConfirm}
-          onCancel={() => setExcludeModal(false)}
         />
       )}
     </>

@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import { Check, Trash2, Plus, Settings, Star, Clock, Swords, X, Play, Timer, Flame, AlertTriangle, Trophy, RotateCcw, ChevronLeft, ChevronRight, CalendarDays, BarChart2, MessageCircle } from 'lucide-react'
 import { api, type DailyTask, type DailyBounty, type WorkRestConfig, type RoutineTask, type RoutinesData, type ArchivedRoutine } from '@/lib/api'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
@@ -252,7 +251,6 @@ function TaskAnalysisDrawer({ onClose }: { onClose: () => void }) {
 function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; stars: number; count_in_effective: boolean; keep: boolean }) => Promise<void> }) {
   const [content, setContent]                 = useState('')
   const [hours, setHours]                     = useState(1)
-  const [stars, setStars]                     = useState(3)
   const [countInEffective, setCountInEffective] = useState(true)
   const [keep, setKeep]                       = useState(false)
   const [adding, setAdding]                   = useState(false)
@@ -263,6 +261,8 @@ function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; star
     if (!trimmed || adding) return
     setAdding(true)
     try {
+      // 星星数由系统随机分配（1-5），用户不再手动选择
+      const stars = Math.floor(Math.random() * 5) + 1
       await onAdd({ content: trimmed, hours, stars, count_in_effective: countInEffective, keep })
       setContent('')
       inputRef.current?.focus()
@@ -281,9 +281,8 @@ function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; star
           onChange={e => setContent(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter') { e.preventDefault(); submit() }
-            if (e.key === ' ' && content.trim()) { e.preventDefault(); submit() }
           }}
-          placeholder="任务内容 — Enter 或空格快速添加下一条"
+          placeholder="任务内容 — Enter 快速添加下一条"
           className="flex-1 h-9 rounded-xl border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
           autoFocus
         />
@@ -309,7 +308,6 @@ function QuickAdd({ onAdd }: { onAdd: (t: { content: string; hours: number; star
           />
           <span className="text-xs">h</span>
         </div>
-        <StarPicker value={stars} onChange={setStars} />
         <label className="flex items-center gap-1.5 cursor-pointer select-none ml-auto">
           <input
             type="checkbox"
@@ -379,7 +377,6 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
             />
             <span className="text-xs">h</span>
           </div>
-          <StarPicker value={draft.stars} onChange={s => setDraft(d => ({ ...d, stars: s }))} />
           <label className="flex items-center gap-1.5 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -445,42 +442,49 @@ function TaskRow({ task, onToggle, onDelete, onUpdate, onStart, readOnly = false
         )}>
           {task.content}
         </p>
-        <div className="flex items-center gap-2 mt-0.5">
-          <span className="text-[11px] text-muted-foreground flex items-center gap-0.5">
-            <Clock className="h-3 w-3" />{task.hours}h
-          </span>
-          <span className="flex gap-0.5">
-            {Array.from({ length: task.stars }).map((_, i) => (
-              <Star key={i} className="h-2.5 w-2.5 text-amber-400 fill-amber-400" />
-            ))}
-          </span>
-          {isFailed && !isComplete && (
-            <span className="text-[10px] text-rose-500 font-medium">
-              {completePct != null ? `${completePct}% · ` : ''}失败 · 可重试
-            </span>
-          )}
-          {isPaused && !isComplete && (
-            <span className="text-[10px] text-amber-600 font-medium">
-              {completePct != null ? `${completePct}% · ` : ''}已暂停 · 点击继续
-            </span>
-          )}
-          {task.keep && (
-            <span className="text-[10px] text-sky-600 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-md">
-              保留
-            </span>
-          )}
-          {!(task.count_in_effective ?? true) && (
-            <span className="text-[10px] text-muted-foreground/70 bg-secondary px-1.5 py-0.5 rounded-md">
-              不计时
-            </span>
-          )}
-          {isComplete && score != null && (task.count_in_effective ?? true) && (
-            <span className="text-[10px] text-amber-500 font-medium bg-amber-50 px-1.5 py-0.5 rounded-md">
-              +{score}★
-            </span>
-          )}
-        </div>
+        {/* 状态徽标（失败/暂停/保留/不计时/得分）留在内容下方，时长星级移到右侧 */}
+        {(isFailed || isPaused || task.keep || !(task.count_in_effective ?? true) || (isComplete && score != null)) && (
+          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+            {isFailed && !isComplete && (
+              <span className="text-[10px] text-rose-500 font-medium">
+                {completePct != null ? `${completePct}% · ` : ''}失败 · 可重试
+              </span>
+            )}
+            {isPaused && !isComplete && (
+              <span className="text-[10px] text-amber-600 font-medium">
+                {completePct != null ? `${completePct}% · ` : ''}已暂停 · 点击继续
+              </span>
+            )}
+            {task.keep && (
+              <span className="text-[10px] text-sky-600 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-md">
+                保留
+              </span>
+            )}
+            {!(task.count_in_effective ?? true) && (
+              <span className="text-[10px] text-muted-foreground/70 bg-secondary px-1.5 py-0.5 rounded-md">
+                不计时
+              </span>
+            )}
+            {isComplete && score != null && (task.count_in_effective ?? true) && (
+              <span className="text-[10px] text-amber-500 font-medium bg-amber-50 px-1.5 py-0.5 rounded-md">
+                +{score}★
+              </span>
+            )}
+          </div>
+        )}
       </button>
+
+      {/* 时长 + 星级：移到右侧，与内容平行 */}
+      <div className="flex items-center gap-2 shrink-0 mt-0.5">
+        <span className="text-[11px] text-muted-foreground flex items-center gap-0.5">
+          <Clock className="h-3 w-3" />{task.hours}h
+        </span>
+        <span className="flex gap-0.5">
+          {Array.from({ length: task.stars }).map((_, i) => (
+            <Star key={i} className="h-3 w-3 text-amber-400 fill-amber-400" />
+          ))}
+        </span>
+      </div>
       {/* 开始/重试/继续按钮（历史只读时隐藏） */}
       {canStart && (
         <button
@@ -836,16 +840,18 @@ function RoutineCard({
               {routine.content}
             </p>
           </div>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-[11px] text-muted-foreground flex items-center gap-0.5">
-              <Clock className="h-3 w-3" />{routine.hours}h
-            </span>
-            <span className="flex gap-0.5">
-              {Array.from({ length: routine.stars }).map((_, i) => (
-                <Star key={i} className="h-2.5 w-2.5 text-amber-400 fill-amber-400" />
-              ))}
-            </span>
-          </div>
+        </div>
+
+        {/* 时长 + 星级：移到右侧，与内容平行 */}
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[11px] text-muted-foreground flex items-center gap-0.5">
+            <Clock className="h-3 w-3" />{routine.hours}h
+          </span>
+          <span className="flex gap-0.5">
+            {Array.from({ length: routine.stars }).map((_, i) => (
+              <Star key={i} className="h-3 w-3 text-amber-400 fill-amber-400" />
+            ))}
+          </span>
         </div>
 
         {/* 右侧按钮组 */}
@@ -937,22 +943,15 @@ function RoutineCard({
 // ── 计时设置弹窗 ──────────────────────────────────────────────
 function WorkRestModal({
   cfg,
-  onSave,
   onClose,
 }: {
   cfg: WorkRestConfig
-  onSave: (c: WorkRestConfig) => Promise<void>
+  onSave?: (c: WorkRestConfig) => Promise<void>   // 已固定只读，保留以兼容调用处
   onClose: () => void
 }) {
-  const [workMins, setWorkMins] = useState(cfg.work_mins)
-  const [restMins, setRestMins] = useState(cfg.rest_mins)
-  const [saving, setSaving] = useState(false)
-
-  async function save() {
-    setSaving(true)
-    try { await onSave({ work_mins: workMins, rest_mins: restMins }) }
-    finally { setSaving(false) }
-  }
+  // 节奏已固定为只读展示，不再可编辑（保留面板让用户知道数值）
+  const workMins = cfg.work_mins
+  const restMins = cfg.rest_mins
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -963,7 +962,7 @@ function WorkRestModal({
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-base font-semibold">计时设置</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">自定义工作与休息节奏</p>
+              <p className="text-xs text-muted-foreground mt-0.5">当前工作与休息节奏</p>
             </div>
             <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
               <X className="h-4 w-4" />
@@ -978,10 +977,10 @@ function WorkRestModal({
               </div>
               <div className="flex items-center gap-1.5">
                 <input
-                  type="number" min={5} max={120} step={5}
+                  type="number"
                   value={workMins}
-                  onChange={e => setWorkMins(Number(e.target.value))}
-                  className="w-16 h-8 rounded-lg border border-input bg-background px-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-ring/40"
+                  readOnly disabled
+                  className="w-16 h-8 rounded-lg border border-input bg-secondary/60 px-2 text-sm text-center text-muted-foreground cursor-not-allowed focus:outline-none"
                 />
                 <span className="text-xs text-muted-foreground">分钟</span>
               </div>
@@ -994,10 +993,10 @@ function WorkRestModal({
               </div>
               <div className="flex items-center gap-1.5">
                 <input
-                  type="number" min={1} max={30} step={1}
+                  type="number"
                   value={restMins}
-                  onChange={e => setRestMins(Number(e.target.value))}
-                  className="w-16 h-8 rounded-lg border border-input bg-background px-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-ring/40"
+                  readOnly disabled
+                  className="w-16 h-8 rounded-lg border border-input bg-secondary/60 px-2 text-sm text-center text-muted-foreground cursor-not-allowed focus:outline-none"
                 />
                 <span className="text-xs text-muted-foreground">分钟</span>
               </div>
@@ -1009,16 +1008,10 @@ function WorkRestModal({
             </div>
           </div>
 
-          <div className="flex gap-2">
-            <button onClick={onClose}
-              className="flex-1 h-9 rounded-2xl border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">
-              取消
-            </button>
-            <button onClick={save} disabled={saving}
-              className="flex-1 h-9 rounded-2xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
-              {saving ? '保存中…' : '保存'}
-            </button>
-          </div>
+          <button onClick={onClose}
+            className="w-full h-9 rounded-2xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+            知道了
+          </button>
         </div>
       </div>
     </div>
@@ -1149,6 +1142,15 @@ export function Tasks() {
     })()
   }, [selectedDate])
 
+  // 学习时长整段裁定后，常规任务也被一并结算 → 刷新常规任务列表
+  useEffect(() => {
+    const onRoutinesRefresh = () => {
+      api.routines.get().then(rd => { if (rd) setRoutinesData(rd) }).catch(() => {})
+    }
+    window.addEventListener('agent:routines-refresh', onRoutinesRefresh)
+    return () => window.removeEventListener('agent:routines-refresh', onRoutinesRefresh)
+  }, [])
+
   // 关窗恢复：挂载时检查 localStorage 里有没有未结束的计时
   // ≤10 分钟内重开 → 弹窗问是否继续；超时 → 直接按中断保存记录
   useEffect(() => {
@@ -1207,12 +1209,19 @@ export function Tasks() {
 
   async function handleAdd(t: { content: string; hours: number; stars: number; count_in_effective: boolean; keep: boolean }) {
     await api.tasks.addDaily(t)
+    // 新增任务会触发搭子反馈，提示聊天栏尽快刷新
+    if (isToday) window.dispatchEvent(new CustomEvent('agent:dialogue-refresh'))
     reload(selectedDate)
     api.tasks.dailyDates().then(d => setDatesWithTasks(new Set(d))).catch(() => {})
   }
   async function handleToggle(id: string, currentDone: boolean) {
     await api.tasks.toggleDone(id)
-    if (!currentDone) playTaskDone()
+    if (!currentDone) {
+      playTaskDone()
+      // 勾选完成会触发搭子反馈，提示聊天栏尽快刷新（覆盖后台异步生成的几秒）
+      window.dispatchEvent(new CustomEvent('agent:dialogue-refresh'))
+      window.dispatchEvent(new CustomEvent('agent:buff-reward-refresh'))
+    }
     reload(selectedDate)
     setStudyRefreshKey(k => k + 1)
   }
@@ -1312,10 +1321,6 @@ export function Tasks() {
               className="flex items-center gap-1.5 text-xs text-muted-foreground border border-border rounded-lg px-3 py-1.5 hover:bg-secondary transition-colors">
               <BarChart2 className="h-3.5 w-3.5" /> 分析
             </button>
-            <Link to="/tasks/manage"
-              className="flex items-center gap-1.5 text-xs text-muted-foreground border border-border rounded-lg px-3 py-1.5 hover:bg-secondary transition-colors">
-              <Settings className="h-3.5 w-3.5" /> 管理
-            </Link>
           </div>
         </div>
 
@@ -1438,6 +1443,10 @@ export function Tasks() {
                           ...d,
                           routines: d.routines.map(x => x.id === r.id ? updated : x),
                         }))
+                        if (!r.last_done_date || r.last_done_date !== todayStr) {
+                          window.dispatchEvent(new CustomEvent('agent:dialogue-refresh'))
+                          window.dispatchEvent(new CustomEvent('agent:buff-reward-refresh'))
+                        }
                       }
                     }}
                     onDelete={async () => {

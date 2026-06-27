@@ -1,4 +1,12 @@
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700;900&family=Inter:wght@300;400;500;600;700&display=swap');
+/* 字体本地打包（不依赖外网 CDN，离线可用、加载更稳）：
+   Inter（拉丁字）+ 霞鹜文楷 Screen（中文手写楷体，契合暖米白纸质感）。
+   Vite 会把这些 woff2 一并打进产物，按 unicode-range 子集 + swap 按需加载。 */
+@import '@fontsource/inter/300.css';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import 'lxgw-wenkai-screen-webfont/lxgwwenkaiscreen.css';
 
 @tailwind base;
 @tailwind components;
@@ -37,7 +45,7 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: 'Noto Sans SC', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: 'LXGW WenKai Screen', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
   }
 }

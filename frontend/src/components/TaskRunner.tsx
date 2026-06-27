@@ -494,6 +494,10 @@ export function TaskRunner({
       // 注意：存总已工作秒数（含续传进度），中断后下次可据此续传
     }).then(res => {
       setScoreBreakdown(res.score_breakdown)
+      if (success) {
+        window.dispatchEvent(new CustomEvent('agent:dialogue-refresh'))
+        window.dispatchEvent(new CustomEvent('agent:buff-reward-refresh'))
+      }
       onFinished?.(success)
     }).catch(() => {})
     setEndReason(reason)

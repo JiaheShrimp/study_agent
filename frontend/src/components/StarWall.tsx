@@ -1,4 +1,11 @@
-export function StarWall({ count }: { count: number }) {
+// 把 YYYY-MM-DD 格式成「6 月 4 日」
+function fmtMD(d: string): string {
+  if (!d) return ''
+  const dt = new Date(d + 'T00:00:00')
+  return `${dt.getMonth() + 1} 月 ${dt.getDate()} 日`
+}
+
+export function StarWall({ count, best }: { count: number; best?: { value: number; date: string } }) {
   if (count <= 0) return null
 
   const rows: number[] = []
@@ -23,6 +30,12 @@ export function StarWall({ count }: { count: number }) {
           </div>
         ))}
       </div>
+      {best && best.value > 0 && (
+        <p className="text-[11px] text-muted-foreground pt-1 border-t border-border">
+          🏆 历史最佳单日 <span className="font-semibold text-amber-600">{best.value} ★</span>
+          <span className="ml-1">· {fmtMD(best.date)}</span>
+        </p>
+      )}
     </div>
   )
 }

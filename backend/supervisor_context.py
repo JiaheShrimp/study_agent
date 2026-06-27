@@ -125,9 +125,14 @@ def _routines_block() -> str | None:
 def build_summary() -> str:
     """
     汇总成一段给 AI 读的完整记录。无数据时返回友好兜底。
+
+    末尾附上「可量化数据洞察」（supervisor_stats）——这些是 Python 预先算好的
+    确切数字结论（历史最长专注、距纪录差多少、近一周日均、连续天数……），
+    让 AI 能放心引用具体数据，而不必自己去算。
     """
+    from supervisor_stats import insights_block
     parts = [
-        b for b in (_all_wins_block(), _focus_block(), _routines_block())
+        b for b in (_all_wins_block(), _focus_block(), _routines_block(), insights_block())
         if b
     ]
     if not parts:

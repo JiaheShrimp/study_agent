@@ -153,7 +153,7 @@ export function ChatSidebar() {
       className={cn(
         'shrink-0 h-full',
         // 桌面：四周留内边距，让聊天卡片真正浮起、与导航栏之间有空隙
-        'md:w-80 md:p-3',
+        'md:w-96 md:p-3',
         // 手机端：浮层从左侧盖住
         'max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-full max-md:max-w-xs max-md:p-2'
       )}
@@ -181,7 +181,7 @@ export function ChatSidebar() {
       {/* 消息列表 */}
       <div ref={scrollRef} className="flex-1 overflow-auto px-3 py-4 space-y-3">
         {turns.length === 0 && (
-          <p className="text-center text-xs text-muted-foreground mt-8 px-4">
+          <p className="text-center text-sm text-muted-foreground mt-8 px-4">
             在赢麻了里记一条进步，或在下面跟我说点什么 👋
           </p>
         )}
@@ -192,7 +192,7 @@ export function ChatSidebar() {
           >
             <div
               className={cn(
-                'max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words',
+                'max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap break-words',
                 t.role === 'user'
                   ? 'bg-primary text-primary-foreground rounded-br-sm'
                   : 'bg-secondary text-secondary-foreground rounded-bl-sm'
@@ -238,7 +238,7 @@ export function ChatSidebar() {
           }}
           rows={1}
           placeholder="跟搭子说点什么…"
-          className="flex-1 resize-none rounded-xl border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 max-h-28"
+          className="flex-1 resize-none rounded-xl border border-input bg-background px-3 py-2 text-[15px] focus:outline-none focus:ring-2 focus:ring-ring/40 max-h-28"
         />
         <button
           type="submit"

@@ -20,6 +20,7 @@ backend/data/
 frontend/node_modules/
 frontend/dist/
 frontend/screenshots/
+frontend/*.tsbuildinfo
 
 # 本地启动脚本
 启动.vbs

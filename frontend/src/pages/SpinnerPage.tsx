@@ -4,10 +4,13 @@ import { api, type Spinner } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { playSpinTick, playSpinResult } from '@/lib/sounds'
 
+// 低饱和、有高级感的莫兰迪色系（暖灰 / 雾霾色），与暖米白纸质感统一
 const COLORS = [
-  '#f59e0b','#10b981','#3b82f6','#8b5cf6',
-  '#ef4444','#f97316','#06b6d4','#ec4899',
+  '#c08a6f', '#8a9a7b', '#7d96a8', '#9d8aa8',
+  '#c2867f', '#c9a878', '#7fa39b', '#b08a96',
 ]
+// 扇区文字用柔和深色（莫兰迪底色配纯白对比不足，深色更清晰且更高级）
+const SLICE_TEXT = '#3a3330'
 
 function sectorPath(cx: number, cy: number, r: number, startDeg: number, endDeg: number) {
   const rad = (d: number) => (d * Math.PI) / 180
@@ -115,7 +118,7 @@ function SpinWheel({ items, spinning, result, onSpinEnd }: {
                 <path
                   d={sectorPath(CX, CY, R, start, end)}
                   fill={COLORS[i % COLORS.length]}
-                  stroke="#fff"
+                  stroke="hsl(36 20% 96%)"
                   strokeWidth={2}
                 />
                 <text
@@ -123,10 +126,10 @@ function SpinWheel({ items, spinning, result, onSpinEnd }: {
                   textAnchor="middle"
                   dominantBaseline="middle"
                   transform={`rotate(${midDeg + 90}, ${tx}, ${ty})`}
-                  fill="#fff"
+                  fill={SLICE_TEXT}
                   fontSize={fontSize}
                   fontWeight="700"
-                  fontFamily="'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif"
+                  fontFamily="'LXGW WenKai Screen', 'PingFang SC', 'Microsoft YaHei', sans-serif"
                   letterSpacing="0.5"
                 >
                   {label}
@@ -135,9 +138,9 @@ function SpinWheel({ items, spinning, result, onSpinEnd }: {
             )
           })}
           {/* 外圈描边 */}
-          <circle cx={CX} cy={CY} r={R} fill="none" stroke="#fff" strokeWidth={3} />
+          <circle cx={CX} cy={CY} r={R} fill="none" stroke="hsl(36 20% 96%)" strokeWidth={3} />
           {/* 中心圆 */}
-          <circle cx={CX} cy={CY} r={18} fill="#fff" stroke="hsl(var(--border))" strokeWidth={2} />
+          <circle cx={CX} cy={CY} r={18} fill="hsl(36 18% 99%)" stroke="hsl(var(--border))" strokeWidth={2} />
           <circle cx={CX} cy={CY} r={8} fill="hsl(var(--primary))" />
         </svg>
       </div>

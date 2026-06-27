@@ -1,5 +1,6 @@
 from datetime import datetime, date as Date, timedelta
 from typing import Literal
+import random
 import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -15,6 +16,15 @@ router = APIRouter(prefix="/wins", tags=["wins"])
 WinLevel = Literal["small", "medium", "big", "future"]
 STARS = {"small": 1, "medium": 2, "big": 3, "future": 0}
 
+# 系统随机抽取的赢麻了程度（星星数=奖励值），不含 future。
+# 用户记录赢麻了 / 可赢目标赢一次时，由系统随机决定，用户不再手选。
+ROLL_LEVELS = ["small", "medium", "big"]
+
+
+def _roll_level() -> str:
+    """随机抽一个赢麻了程度（小/中/特大），作为本次的奖励值。"""
+    return random.choice(ROLL_LEVELS)
+
 
 def _game_today() -> str:
     """游戏日以零点为起点，与自然日对齐。"""
@@ -23,7 +33,9 @@ def _game_today() -> str:
 
 class WinCreate(BaseModel):
     content: str
-    win_level: WinLevel
+    # 程度不再由用户指定：非 future 时系统随机抽取（见 create_win）。
+    # 仍保留字段以兼容旧调用，但只有传 "future" 才被尊重，其余一律随机。
+    win_level: WinLevel = "small"
 
 
 class Win(BaseModel):
@@ -70,29 +82,39 @@ def wins_for_date(day: str):
     return [w for w in wins if w["created_at"][:10] == day]
 
 
-@router.post("/", response_model=Win, status_code=201)
-def create_win(body: WinCreate):
+def _record_win(content: str, level: str) -> dict:
+    """新增一条当日赢记录的【唯一入口】，并由此触发搭子反馈。
+
+    搭子的触发统一锚定在「当日赢记录又多了一条」这件事上——
+    无论来源是手动记录、可赢目标「赢一次」，还是以后任何新增路径，
+    都走这个函数，保证「新增即反馈、且只反馈一次」。删除赢记录不经过这里，自然不触发。
+    """
     win = {
         "id": str(uuid.uuid4()),
-        "content": body.content,
-        "win_level": body.win_level,
-        "stars": STARS[body.win_level],
+        "content": content,
+        "win_level": level,
+        "stars": STARS[level],
         "created_at": datetime.now().isoformat(),
     }
     append_win(win)
 
-    # 搭子：记录赢麻了后必然反馈。
-    # 注意：这条操作信息只作为 context 传给搭子当背景（进 AI 的 prompt），
+    # 搭子：当日赢记录新增即反馈。操作信息只作为 context 传给搭子当背景（进 AI 的 prompt），
     # 不写进对话历史、不在聊天框显示成用户气泡——聊天框里只出现搭子的反馈。
     today = win["created_at"][:10]
     recent_today = sum(1 for w in load_wins() if w["created_at"][:10] == today)
     supervisor_react("win_created", {
-        "content": win["content"],
-        "win_level": win["win_level"],
+        "content": content,
+        "win_level": level,
         "recent_count_today": recent_today,
     })
-
     return win
+
+
+@router.post("/", response_model=Win, status_code=201)
+def create_win(body: WinCreate):
+    # 程度（=星星/奖励值）由系统随机抽取，用户不再手选；future 保持原样不随机。
+    level = body.win_level if body.win_level == "future" else _roll_level()
+    return _record_win(body.content, level)
 
 
 @router.delete("/{win_id}", status_code=204)
@@ -143,13 +165,14 @@ class WinnableCreate(BaseModel):
 class Winnable(BaseModel):
     id: str
     content: str
-    win_level: WinnableLevel  # 赢一次时写进当日记录的等级
+    win_level: WinnableLevel  # 旧字段，保留兼容；程度现由系统随机，不再固定
     created_date: str
     total_wins: int           # 累计赢的次数
     streak: int               # 连续赢的天数（今天点过即计入）
     best_streak: int          # 历史最长连续天数
     last_win_date: str | None # 最近一次赢的日期
     won_today: bool           # 今天是否已经点过
+    last_roll_level: WinLevel | None = None  # 本次「赢一次」系统抽到的程度（仅 win 接口返回）
 
 
 class ArchivedWinnable(BaseModel):
@@ -260,18 +283,14 @@ def win_winnable(wid: str):
     target["best_streak"] = max(best, target.get("best_streak", 0))
     save_winnables(items)
 
-    # 复制进当日赢记录，按可赢目标设定的星级
-    level = target.get("win_level", "small")
-    win = {
-        "id": str(uuid.uuid4()),
-        "content": target["content"],
-        "win_level": level,
-        "stars": STARS[level],
-        "created_at": datetime.now().isoformat(),
-    }
-    append_win(win)
+    # 复制进当日赢记录，程度由系统随机抽取——每次「赢一次」都重新随机。
+    # 统一走 _record_win：写记录 + 触发搭子反馈（和手动记录赢同一个口子，不漏不重）。
+    level = _roll_level()
+    _record_win(target["content"], level)
 
-    return _to_winnable(target)
+    result = _to_winnable(target)
+    result["last_roll_level"] = level   # 告诉前端这次抽到了什么程度
+    return result
 
 
 @router.post("/winnables/{wid}/archive", response_model=ArchivedWinnable)

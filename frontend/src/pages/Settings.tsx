@@ -21,6 +21,7 @@ export function Settings() {
 
   const [provider, setProvider]         = useState('')
   const [keyInput, setKeyInput]         = useState('')
+  const [editingKey, setEditingKey]     = useState(false)   // 用户是否正在输入新 Key（否则框里显示掩码）
   const [modelInput, setModelInput]     = useState('')
   const [baseUrlInput, setBaseUrlInput] = useState('')
   const [showKey, setShowKey]           = useState(false)
@@ -34,7 +35,8 @@ export function Settings() {
     setProvider(s.provider || '')
     setModelInput(s.model || '')
     setBaseUrlInput(s.custom_base_url || '')
-    // key 不回填
+    setKeyInput('')
+    setEditingKey(false)   // 回到「显示掩码」态
   }
 
   useEffect(() => { loadStatus() }, [])
@@ -45,20 +47,27 @@ export function Settings() {
   function handleProviderChange(pid: string) {
     setProvider(pid)
     setModelInput('')   // 切换 provider 时清空，让用户重新填
+    setKeyInput('')
+    setEditingKey(false)
   }
 
+  // 已为当前 provider 设过 Key：此时输入框可留空只改模型，后端保留原 Key
+  const keyAlreadySet = !!(status?.key_set && status.provider === provider)
+  // 能保存：选了 provider，且（已有 Key 或这次输入了新 Key）
+  const canSave = !!provider && (keyAlreadySet || !!keyInput.trim())
+
   async function handleSave() {
-    if (saving || !provider || !keyInput.trim()) return
+    if (saving || !canSave) return
     setSaving(true)
     setSaveMsg(null)
     try {
       await api.ai.setConfig({
         provider,
+        // 留空 → 后端保留原 Key；填了才替换
         api_key: keyInput.trim(),
         model: modelInput.trim(),
         custom_base_url: baseUrlInput.trim(),
       })
-      setKeyInput('')
       await loadStatus()
       setSaveMsg('ok')
     } catch {
@@ -210,29 +219,42 @@ export function Settings() {
                 </label>
                 <div className="flex gap-2">
                   <div className="relative flex-1">
-                    <input
-                      type={showKey ? 'text' : 'password'}
-                      value={keyInput}
-                      onChange={e => setKeyInput(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') handleSave() }}
-                      placeholder={
-                        status?.key_set && status.provider === provider
-                          ? '输入新 Key 可替换…'
-                          : (providerMeta?.hint_key ?? 'API Key')
-                      }
-                      className="w-full h-9 rounded-xl border border-input bg-background px-3 pr-9 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowKey(v => !v)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                    </button>
+                    {keyAlreadySet && !editingKey ? (
+                      // 已存 Key 且没在改 → 直接把掩码当文字显示（如 sk-2437****4d69），
+                      // 一眼看到 Key 还在；点一下进入编辑态输新 Key（留空保存 = 保留原 Key）
+                      <input
+                        type="text"
+                        readOnly
+                        value={status?.key_mask ?? ''}
+                        onFocus={() => setEditingKey(true)}
+                        onMouseDown={() => setEditingKey(true)}
+                        className="w-full h-9 rounded-xl border border-input bg-background px-3 pr-9 text-sm font-mono text-muted-foreground cursor-text focus:outline-none focus:ring-2 focus:ring-ring/40"
+                      />
+                    ) : (
+                      <input
+                        type={showKey ? 'text' : 'password'}
+                        autoFocus={editingKey}
+                        value={keyInput}
+                        onChange={e => setKeyInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleSave() }}
+                        placeholder={providerMeta?.hint_key ?? 'API Key'}
+                        className="w-full h-9 rounded-xl border border-input bg-background px-3 pr-9 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40"
+                      />
+                    )}
+                    {/* 眼睛按钮只在编辑态有意义（掩码已是明文，无需切换） */}
+                    {!(keyAlreadySet && !editingKey) && (
+                      <button
+                        type="button"
+                        onClick={() => setShowKey(v => !v)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      </button>
+                    )}
                   </div>
                   <button
                     onClick={handleSave}
-                    disabled={saving || !keyInput.trim()}
+                    disabled={saving || !canSave}
                     className="h-9 px-4 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-40 shrink-0"
                   >
                     {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '保存'}

@@ -46,6 +46,11 @@ def make_icon() -> Image.Image:
 
 _procs: list[subprocess.Popen] = []
 
+# 启动期「页面是否已被打开过」标记，只用于防止启动时的重复跳页：
+#   - 用户等不及、手动点了托盘「打开」→ 置位 → 随后的自动打开就跳过，不再叠开第二个。
+# 注意：手动「打开」本身永远有效（显式操作不吞），这个标记只拦自动打开那一侧。
+_opened_during_startup = threading.Event()
+
 LOG_DIR = os.path.join(ROOT, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -55,8 +60,12 @@ def _logfile(name: str):
 def start_backend() -> subprocess.Popen:
     # --reload：改后端代码自动重启，不用退出托盘再起。
     # reloader 会拉起 worker 子进程；退出时靠 stop_all() 的端口清理兜底回收。
+    # --no-access-log：不记录每条 HTTP 请求。前端每 5 秒轮询会刷出海量
+    # "GET /ai/dialogue 200 OK" 噪声日志（曾把 backend.log 撑到 50MB/70万行），
+    # 关掉后日志只剩真正有用的报错/启动信息，既清爽又少磁盘写。
     return subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "main:app", "--port", "8000", "--reload"],
+        [sys.executable, "-m", "uvicorn", "main:app", "--port", "8000",
+         "--reload", "--no-access-log"],
         cwd=BACKEND,
         creationflags=subprocess.CREATE_NO_WINDOW,
         stdout=_logfile("backend.log"),
@@ -92,6 +101,10 @@ def wait_and_open() -> None:
     _wait_url(APP_URL, timeout=60)
     # 预构建完成后再多给一拍，确保 optimizeDeps 写盘完毕，浏览器首次加载即拿到优化后的依赖
     time.sleep(1.5)
+    # 若用户已手动点过托盘「打开」，自动打开就跳过，避免叠出第二个页面
+    if _opened_during_startup.is_set():
+        return
+    _opened_during_startup.set()
     webbrowser.open(APP_URL)
 
 def _kill_port(port: int) -> None:
@@ -110,10 +123,24 @@ def _kill_port(port: int) -> None:
     except Exception:
         pass
 
+def _notify_starting() -> None:
+    """启动瞬间弹一个 Toast，告诉用户「正在启动」，避免干等几十秒以为没反应而乱点。"""
+    try:
+        from winotify import Notification
+        Notification(
+            app_id="Study Agent",
+            title="Study Agent 正在启动…",
+            msg="首次启动需要十几秒，就绪后会自动打开页面，稍等一下～",
+            duration="short",
+        ).show()
+    except Exception:
+        pass
+
 def launch_all() -> None:
     _kill_port(8000)
     _kill_port(5173)
     time.sleep(0.5)
+    _notify_starting()
     _procs.append(start_backend())
     _procs.append(start_frontend())
     threading.Thread(target=wait_and_open, daemon=True).start()
@@ -180,7 +207,16 @@ def reminder_loop() -> None:
 # ── 托盘菜单 ─────────────────────────────────────────────────
 
 def on_open(icon, item):
-    webbrowser.open(APP_URL)
+    # 手动点「打开」永远有效（显式操作不吞）。同时置位 startup 标记，
+    # 让启动时尚未触发的自动打开跳过，避免「手点 + 自动」叠出两个页面。
+    _opened_during_startup.set()
+
+    def _open():
+        # 前端没就绪就先等它能响应再开，避免开出报错页（用户等不及提前点时常见）
+        _wait_url(APP_URL, timeout=30)
+        webbrowser.open(APP_URL)
+
+    threading.Thread(target=_open, daemon=True).start()
 
 def on_quit(icon, item):
     stop_all()

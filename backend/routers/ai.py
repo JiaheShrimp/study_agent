@@ -38,14 +38,21 @@ SUPERVISOR_SYSTEM = (
     "在意什么、有过哪些高光、哪些事一直在坚持。\n"
     "你的性格：真诚、有人味、偶尔俏皮，会真心为他的进步高兴，也会半开玩笑地损他一下"
     "——但绝不说教、不喊口号、不像班主任。\n"
+    "下面资料末尾可能有一段【可量化数据洞察】——那是已经替你算好的确切数字"
+    "（历史最长专注是哪天、距破纪录还差几分钟、近一周日均、连续多少天……）。\n"
     "硬性要求：\n"
     "1. 只输出一句话，最多 40 个字，像朋友发微信一样随口一说；不要解释、不要列点、不要加引号。\n"
     "2. 从他的**整体记录**里自由挑你想聊的点说具体的话——可以是某件让你印象深刻的事、"
     "某个长期坚持的习惯、某段时间的状态，甚至把几件事串起来调侃。"
     "不用拘泥于他今天做了什么；今天没什么内容就聊别的，别硬凑今天。\n"
-    "3. 让他感觉你是真的认识他这个人、记得他做过的事，而不是一个只会套话的机器人。\n"
-    "4. 禁止说『加油』『好好学习』『快去写作业』这类空泛、说教、命令式的话。\n"
-    "5. 用中文，可以带一点 emoji 但别超过一个。"
+    "3. **偶尔**（不是每次）可以结合那段数据洞察，抛一个具体数字给他——"
+    "比如『你历史最长是 12 天前那次 90 分钟，今天再撑 20 分就破了』『你这周日均比上周少了 15 分，最近偷懒了啊』。"
+    "数字要直接用算好的，别自己瞎编；可以正面打气，也可以调侃/小损一下。"
+    "但别每条都报数据、别像播报员，多数时候还是像朋友闲聊。\n"
+    "4. 措辞每次都要新——同样的意思换不同说法，绝不套模板、不重复你之前说过的话。\n"
+    "5. 让他感觉你是真的认识他这个人、记得他做过的事，而不是一个只会套话的机器人。\n"
+    "6. 禁止说『加油』『好好学习』『快去写作业』这类空泛、说教、命令式的话。\n"
+    "7. 用中文，可以带一点 emoji 但别超过一个。"
 )
 
 # ─────────────────────────────────────────────────────────────
@@ -91,39 +98,10 @@ def _scene_win(context: dict) -> str:
     return "\n".join(s)
 
 
-def _scene_task_done(context: dict) -> str:
-    content = context.get("content", "")
-    early = context.get("early", False)
-    mins = context.get("minutes", 0)
-    score = context.get("score", 0)
-    s = [f"我刚完成了任务「{content}」" + ("，还是提前完成的" if early else "") + "。"]
-    if mins:
-        s.append(f"专注了大约 {mins} 分钟" + (f"，拿了 {score} 分。" if score else "。"))
-    s.append("像朋友一样，结合这件事和你对我的了解，自然回我一句（别喊口号）。")
-    return "\n".join(s)
-
-
-def _scene_task_failed(context: dict) -> str:
-    content = context.get("content", "")
-    reason = context.get("reason", "")
-    pct = context.get("percent", 0)
-    how = "中途停了" if reason == "giveup" else "力竭没撑住"
-    s = [f"我刚才做任务「{content}」{how}，完成了大概 {pct}%。"]
-    s.append("别说教、别让我加油，就像懂我的朋友那样轻松接一句（可以损我但要暖）。")
-    return "\n".join(s)
-
-
 def _scene_task_start(context: dict) -> str:
     content = context.get("content", "")
     return (f"我刚开始做任务「{content}」，正在计时。"
             "随口给我一句话就行，别喊口号、别命令我，像朋友一样。")
-
-
-def _scene_routine_milestone(context: dict) -> str:
-    content = context.get("content", "")
-    streak = context.get("streak", 0)
-    return (f"我的常规习惯「{content}」已经连续打卡 {streak} 天了。"
-            "这是个值得一提的里程碑，像朋友一样真心替我高兴地说一句。")
 
 
 def _scene_idle(context: dict) -> str:
@@ -134,6 +112,61 @@ def _scene_idle(context: dict) -> str:
             "像朋友突然发来一条微信。别提『加油/快去学习』。")
 
 
+# ── 统一任务事件场景 ─────────────────────────────────────────────
+#
+# 所有类型任务（日常 / 保留 / 赏金 / 常规）的状态/内容变化，都收拢成一个
+# task_event 触发器。业务侧只需调 emit_task_event(kind, task_type, ...)，
+# 不再为每种任务/每种操作各写一段 scene。新任务类型天然被覆盖。
+
+# 任务类型 → 中文称呼，用于场景描述
+_TASK_TYPE_LABEL = {
+    "daily": "每日任务",
+    "kept": "保留任务",
+    "bounty": "赏金任务",
+    "routine": "常规习惯",
+}
+
+
+def _scene_task_event(context: dict) -> str:
+    """统一任务事件场景：按 kind（发生了什么）+ task_type（哪种任务）组装。"""
+    kind = context.get("kind", "")
+    ttype = context.get("task_type", "daily")
+    label = _TASK_TYPE_LABEL.get(ttype, "任务")
+    content = context.get("content", "")
+    mins = context.get("minutes", 0)
+    score = context.get("score", 0)
+    early = context.get("early", False)
+    pct = context.get("percent", 0)
+    streak = context.get("streak", 0)
+
+    if kind == "completed":
+        head = f"我刚完成了一个{label}「{content}」" + ("，还是提前完成的" if early else "") + "。"
+        tail = ""
+        if streak:                      # 常规打卡带上连续天数
+            tail = f"这个习惯已经连着第 {streak} 天了。"
+        elif mins:
+            tail = f"专注了大约 {mins} 分钟" + (f"，拿了 {score} 分。" if score else "。")
+        return head + tail + "像朋友一样，结合这件事和你对我的了解，自然回我一句（别喊口号）。"
+
+    if kind == "interrupted" or kind == "failed":
+        how = "中途停了" if kind == "interrupted" else "力竭没撑住"
+        return (f"我刚才做{label}「{content}」{how}，完成了大概 {pct}%。"
+                "别说教、别让我加油，就像懂我的朋友那样轻松接一句（可以损我但要暖）。")
+
+    if kind == "created":
+        extra = f"，预计花 {context.get('hours', 0)} 小时" if context.get("hours") else ""
+        return (f"我刚给自己加了一个{label}「{content}」{extra}。"
+                "像朋友一样轻松回我一句（别喊口号、别催我、别命令我去做）。")
+
+    if kind == "deleted":
+        return (f"我刚把一个{label}「{content}」删掉了，可能是加错了或者不想做了。"
+                "别追问为什么、别说教，就像朋友那样轻描淡写接一句就行。")
+
+    # 兜底：未知 kind，给个中性描述
+    return (f"我的{label}「{content}」有了点变化。"
+            "像朋友一样随口回我一句。")
+
+
 # trigger id -> Trigger。新增触发点只在这里加一条。
 TRIGGERS: dict[str, Trigger] = {
     "win_created": Trigger(
@@ -141,27 +174,67 @@ TRIGGERS: dict[str, Trigger] = {
         fallback=["看到啦，这条记下了，挺好的。👀", "嘿，又赢了一把，我有在认真看哦。",
                   "记下来了，这种感觉是不是还挺爽的。", "不错呀，这一笔我替你高兴。"],
     ),
-    "task_done": Trigger(
-        prob=0.7, cooldown=900, scene=_scene_task_done,
-        fallback=["搞定一个，舒服。", "这件事画上句号啦，不错。", "完成了哈，我看着呢。"],
-    ),
-    "task_failed": Trigger(
-        prob=0.6, cooldown=900, scene=_scene_task_failed,
-        fallback=["没关系，停一下也正常。", "今天先这样，回头再说。", "嗯，状态有起伏很正常。"],
-    ),
-    "task_start": Trigger(
+    "task_start": Trigger(    # 计时开始：已注册待接入，暂无后端 hook
         prob=0.25, cooldown=1800, scene=_scene_task_start,
         fallback=["开整啦，我陪着。", "走起，我在这看着。"],
-    ),
-    "routine_milestone": Trigger(
-        prob=0.9, cooldown=600, scene=_scene_routine_milestone,
-        fallback=["这个坚持得是真可以。", "连着这么多天，稳。"],
     ),
     "idle": Trigger(
         prob=1.0, cooldown=0, scene=_scene_idle,   # 主动说话：频率由后台定时器控制
         fallback=["在忙啥呢，冒个泡。", "我突然想起你前两天那条记录，挺有意思。"],
     ),
+
+    # ── 统一任务事件（所有类型任务共用一个 scene，按 kind 分粒度） ──
+    # 完成：任何类型必反馈（emit_task_event 里 force=True，prob/cooldown 不参与）
+    "task_completed": Trigger(
+        prob=1.0, cooldown=0, scene=_scene_task_event,
+        fallback=["搞定一个，舒服。", "这件事画上句号啦，不错。", "完成了哈，我看着呢。"],
+    ),
+    # 中断/力竭：沿用旧的概率与冷却（别在失败时连环唠叨）
+    "task_aborted": Trigger(
+        prob=0.6, cooldown=900, scene=_scene_task_event,
+        fallback=["没关系，停一下也正常。", "今天先这样，回头再说。", "嗯，状态有起伏很正常。"],
+    ),
+    # 新增：必反馈（emit_task_event 里 force=True）
+    "task_created": Trigger(
+        prob=1.0, cooldown=0, scene=_scene_task_event,
+        fallback=["新任务记下啦，回头一起搞定。", "嗯，又给自己安排上了，我看着呢。",
+                  "这条加进来了，不急，一步步来。"],
+    ),
+    # 删除：低概率 + 冷却，避免连删/改错重加时刷屏
+    "task_deleted": Trigger(
+        prob=0.2, cooldown=600, scene=_scene_task_event,
+        fallback=["删了就删了，没事。", "嗯，去掉一个，轻装上阵。"],
+    ),
 }
+
+
+# kind → (trigger id, 是否 force)。完成/新增必反馈，失败按概率，删除低概率。
+_TASK_EVENT_ROUTING: dict[str, tuple[str, bool]] = {
+    "completed":   ("task_completed", True),
+    "interrupted": ("task_aborted",   False),
+    "failed":      ("task_aborted",   False),
+    "created":     ("task_created",   True),
+    "deleted":     ("task_deleted",   False),
+}
+
+
+def emit_task_event(kind: str, task_type: str, **payload) -> None:
+    """统一任务事件入口：任何类型任务的状态/内容变化都走这里。
+
+    业务侧只需一行 emit_task_event("completed", "routine", content=..., streak=...)，
+    不再为每种任务/每种操作各写场景与触发逻辑。
+
+    - kind:      completed | interrupted | failed | created | deleted
+    - task_type: daily | kept | bounty | routine
+    - payload:   场景需要的字段（content / minutes / score / early / percent /
+                 streak / hours 等），透传给 _scene_task_event
+    """
+    routing = _TASK_EVENT_ROUTING.get(kind)
+    if routing is None:
+        return
+    trigger, force = routing
+    context = {"kind": kind, "task_type": task_type, **payload}
+    supervisor_react(trigger, context, force=force)
 
 
 def _history_messages(extra_user: str) -> list[dict]:
@@ -200,8 +273,39 @@ def _history_messages(extra_user: str) -> list[dict]:
         if role in ("user", "assistant") and content:
             messages.append({"role": role, "content": content})
 
-    messages.append({"role": "user", "content": extra_user})
+    # 「偶尔报数据」由这里的随机引导落地（≈35% 概率），而不是靠模型自觉——
+    # 命中时强力要求这一句结合一个具体数字洞察；否则明确叫它别报数据、就闲聊。
+    # 这样"偶尔"是可控的、且每次措辞不同，不会变成每条都念数据的播报员。
+    steer = _data_steer()
+    extra = extra_user if not steer else (extra_user + "\n\n" + steer)
+
+    messages.append({"role": "user", "content": extra})
     return messages
+
+
+# 命中时把这一句拽向「用一个具体数字」，并给几种不同口吻避免套路化
+_DATA_STEER_HIT = [
+    "（这次结合上面【数据洞察】里的某一条，自然地抛一个具体数字给我——正面打气或调侃我都行，但只说一句、别像播报。）",
+    "（这次挑一个算好的数字说，比如距纪录还差多少、这周日均变化、连续多少天，包装成朋友随口一提。）",
+    "（这次用一个硬数据损我一下或夸我一下，数字要准，话要短。）",
+    "（这次结合数据洞察里的一条，给我点具体的——别空泛，落到分钟/天数/条数上。）",
+]
+_DATA_STEER_MISS = [
+    "（这次别报数据、别提数字，就像朋友闲聊一样随口说一句。）",
+    "（这次不用扯统计，挑件我记录里具体的事聊就行。）",
+]
+
+
+def _data_steer() -> str | None:
+    """随机决定这次要不要引导搭子结合数据说话（≈35% 命中报数据）。"""
+    import random as _r
+    roll = _r.random()
+    if roll < 0.35:
+        return _r.choice(_DATA_STEER_HIT)
+    # 其余大多数时候，明确叫它别报数据，保证"偶尔"而非"老报"
+    if roll < 0.70:
+        return _r.choice(_DATA_STEER_MISS)
+    return None  # 剩下的不加引导，完全自由发挥
 
 
 def _generate(extra_user: str, *, fallback_pool: list[str]) -> str:
@@ -488,9 +592,23 @@ class AIStatus(BaseModel):
     available: bool
     provider: str
     key_set: bool
+    key_mask: str           # 掩码后的 Key（如 sk-bc54••••672f），仅用于前端显示「已存」，不含明文
     model: str
     custom_base_url: str
     providers: list[ProviderMeta]
+
+
+def _mask_key(key: str) -> str:
+    """把 API Key 打码：保留前 6 + 后 4，中间用 • 替代；太短则整段打码。
+
+    只用于让前端显示「Key 还在」，绝不返回明文。
+    """
+    key = key.strip()
+    if not key:
+        return ""
+    if len(key) <= 10:
+        return "•" * len(key)
+    return key[:6] + "••••" + key[-4:]
 
 
 class AIConfigUpdate(BaseModel):
@@ -517,6 +635,7 @@ def get_ai_status():
         available=ai_client.is_available(),
         provider=cfg.get("ai_provider", ""),
         key_set=bool(cfg.get("ai_api_key", "").strip()),
+        key_mask=_mask_key(cfg.get("ai_api_key", "")),
         model=cfg.get("ai_model", ""),
         custom_base_url=cfg.get("ai_custom_base_url", ""),
         providers=providers,
@@ -528,8 +647,13 @@ def update_ai_config(body: AIConfigUpdate):
     if body.provider and body.provider not in ai_client.PROVIDERS:
         raise HTTPException(400, f"不支持的 provider：{body.provider}")
     cfg = load_config()
-    cfg["ai_provider"] = body.provider.strip()
-    cfg["ai_api_key"] = body.api_key.strip()
+    provider = body.provider.strip()
+    cfg["ai_provider"] = provider
+    # Key 处理：只改模型时前端可不重输 Key，此时传空字符串 → 保留原有 Key 不覆盖。
+    # 但「禁用」场景 provider 为空，需要把 Key 一并清掉，故仅在 provider 非空时保留旧 Key。
+    new_key = body.api_key.strip()
+    if new_key or not provider:
+        cfg["ai_api_key"] = new_key
     cfg["ai_model"] = body.model.strip()
     cfg["ai_custom_base_url"] = body.custom_base_url.strip()
     save_config(cfg)

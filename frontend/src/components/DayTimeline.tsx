@@ -121,9 +121,6 @@ function RunRow({ run, onTimeUpdate }: { run: Run; onTimeUpdate: (startedAt: str
         )}>
           {run.task_content}
           {isPaused && <span className="ml-1 text-xs text-amber-500">已暂停</span>}
-          {run.source === 'routine' && (
-            <span className="ml-1 text-[10px] text-violet-400 font-normal">常规</span>
-          )}
           {run.count_in_effective === false && (
             <span className="ml-1 text-[10px] text-muted-foreground/60 font-normal">不计时</span>
           )}

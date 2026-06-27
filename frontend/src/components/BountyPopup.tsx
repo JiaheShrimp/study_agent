@@ -72,10 +72,14 @@ export function BountyPopup() {
       window.setTimeout(check, 800)
       window.setTimeout(check, 2000)
     }
-    // 任务页「赏金 N」按钮主动要求打开 → 拉取当前 pending 并强制弹出
+    // 任务页「赏金 N」按钮主动要求打开 → 拉取全部赏金里所有 pending 的强制弹出。
+    // 注意：这里用 dailyBounties()（全量）而不是 pendingBounties()——后者只返回
+    // popup_at 已到的，而「赏金 N」按钮统计的是全部 pending（含 popup_at 未到的），
+    // 用 pendingBounties() 会让按钮有数却弹不出来。
     const onOpen = () => {
-      api.tasks.pendingBounties().then(list => {
-        if (list.length) { setPending(list); setOpen(true) }
+      api.tasks.dailyBounties().then(all => {
+        const stillPending = all.filter(b => b.status === 'pending')
+        if (stillPending.length) { setPending(stillPending); setOpen(true) }
       }).catch(() => {})
     }
     window.addEventListener('agent:bounty-refresh', onBounty)

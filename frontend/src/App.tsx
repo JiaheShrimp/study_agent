@@ -5,11 +5,10 @@ import { Dashboard } from '@/pages/Dashboard'
 import { Wins } from '@/pages/Wins'
 import { Plan } from '@/pages/Placeholder'
 import { Tasks } from '@/pages/Tasks'
-import { TasksManage } from '@/pages/TasksManage'
 import { Settings } from '@/pages/Settings'
 import { SpinnerPage } from '@/pages/SpinnerPage'
 import { SlotMachine } from '@/components/SlotMachine'
-import { RoutineSettlement } from '@/components/RoutineSettlement'
+import { GoalSettlement } from '@/components/GoalSettlement'
 import { api, type DailyBonus } from '@/lib/api'
 
 export default function App() {
@@ -40,7 +39,6 @@ export default function App() {
           <Route index element={<Dashboard bonus={bonus} />} />
           <Route path="wins" element={<Wins />} />
           <Route path="tasks" element={<Tasks />} />
-          <Route path="tasks/manage" element={<TasksManage />} />
           <Route path="plan" element={<Plan />} />
           <Route path="spinner" element={<SpinnerPage />} />
           <Route path="settings" element={<Settings />} />
@@ -54,8 +52,9 @@ export default function App() {
         />
       )}
 
-      {/* 老虎机关闭后再弹漏打结算，避免两个弹窗叠在一起 */}
-      {!showSlot && <RoutineSettlement />}
+      {/* 老虎机关闭后再弹结算弹窗，避免两个弹窗叠在一起。
+          常规任务不再单独弹窗——跟随学习时长的整段裁定（跳过=请假桥接 / 算中断=计失败）。 */}
+      {!showSlot && <GoalSettlement onDone={() => window.dispatchEvent(new CustomEvent('agent:routines-refresh'))} />}
     </BrowserRouter>
   )
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { ChevronLeft, ChevronRight, BarChart2, X, Trash2, Plus, Bell, BellOff, Flame, Trophy, PartyPopper } from 'lucide-react'
+import { ChevronLeft, ChevronRight, BarChart2, X, Trash2, Plus, Bell, BellOff, Flame, Trophy, PartyPopper, Target } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, type Win, type WinStats, type ReminderConfig, type Winnable, type ArchivedWinnable } from '@/lib/api'
 import { cn, gameToday } from '@/lib/utils'
@@ -190,7 +190,7 @@ export function Wins() {
             <ul className="divide-y divide-border">
               {dayWins.map(w => (
                 <li key={w.id} className="flex items-start gap-3 px-5 py-3.5 group">
-                  <span className={cn('text-[11px] px-2 py-0.5 rounded-md font-medium shrink-0 mt-0.5 tabular-nums', LEVEL_MAP[w.win_level].cls)}>
+                  <span className={cn('text-xs px-2.5 py-1 rounded-md font-medium shrink-0 mt-0.5 tabular-nums', LEVEL_MAP[w.win_level].cls)}>
                     {LEVEL_MAP[w.win_level].short} {LEVEL_MAP[w.win_level].label}
                   </span>
                   <span className="text-sm flex-1 leading-relaxed">{w.content}</span>
@@ -229,6 +229,8 @@ function WinnableSection({ onWin, refreshTick }: { onWin: () => void; refreshTic
   const [items, setItems]   = useState<Winnable[]>([])
   const [busyId, setBusyId]   = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  // 某条目刚「赢一次」抽到的程度（短暂闪一下）：id -> win_level
+  const [rollFlash, setRollFlash] = useState<{ id: string; level: Win['win_level'] } | null>(null)
 
   const reload = useCallback(() => {
     api.wins.winnables().then(setItems).catch(() => {})
@@ -242,8 +244,12 @@ function WinnableSection({ onWin, refreshTick }: { onWin: () => void; refreshTic
     if (busyId) return
     setBusyId(w.id)
     try {
-      await api.wins.winWinnable(w.id)
-      playWinRecord(w.win_level)
+      const res = await api.wins.winWinnable(w.id)
+      // 程度由系统随机抽取，用本次抽到的等级播音效 + 闪一下
+      const rolled = (res.last_roll_level ?? 'small') as Win['win_level']
+      playWinRecord(rolled)
+      setRollFlash({ id: w.id, level: rolled })
+      setTimeout(() => setRollFlash(f => (f && f.id === w.id ? null : f)), 2000)
       // 通知搭子聊天栏：又赢了一次，尽快刷新拉取搭子反馈
       window.dispatchEvent(new CustomEvent('agent:dialogue-refresh'))
       reload()
@@ -270,7 +276,7 @@ function WinnableSection({ onWin, refreshTick }: { onWin: () => void; refreshTic
       <div className="flex items-center justify-between">
         <div>
           <span className="text-sm font-medium flex items-center gap-1.5">
-            <span className="text-indigo-400">◇</span> 可赢目标
+            <Target className="h-4 w-4 text-indigo-400" /> 待赢
           </span>
           <p className="text-[11px] text-muted-foreground/70 mt-0.5">每天点「赢一次」积累连续与次数，赢的内容会进当日记录</p>
         </div>
@@ -290,22 +296,28 @@ function WinnableSection({ onWin, refreshTick }: { onWin: () => void; refreshTic
               key={w.id}
               className="flex items-center gap-3 rounded-xl border border-indigo-200/60 bg-indigo-50/40 px-3.5 py-2.5"
             >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0', LEVEL_MAP[w.win_level].cls)}>
-                    {LEVEL_MAP[w.win_level].short}
+              <div className="flex-1 min-w-0 flex items-center gap-2">
+                {rollFlash && rollFlash.id === w.id && (
+                  <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 animate-pulse', LEVEL_MAP[rollFlash.level].cls)}>
+                    {LEVEL_MAP[rollFlash.level].short} {LEVEL_MAP[rollFlash.level].label}
                   </span>
-                  <p className="text-sm leading-snug truncate">{w.content}</p>
-                </div>
-                <div className="flex items-center gap-3 mt-1 text-[11px] text-muted-foreground">
-                  <span className={cn('flex items-center gap-0.5', w.streak > 0 && 'text-orange-500')}>
-                    <Flame className="h-3 w-3" /> 连续 {w.streak} 天
-                  </span>
-                  <span className="flex items-center gap-0.5">
-                    <Trophy className="h-3 w-3" /> 累计赢 {w.total_wins} 次
-                  </span>
-                </div>
+                )}
+                <p className="text-sm leading-snug truncate">{w.content}</p>
               </div>
+
+              {/* 统计：连续天数 / 累计次数 —— 平行放右侧，pill 样式 */}
+              <div className="shrink-0 flex items-center gap-1.5">
+                <span className={cn(
+                  'flex items-center gap-1 text-xs font-medium rounded-full px-2.5 py-1',
+                  w.streak > 0 ? 'bg-orange-100 text-orange-600' : 'bg-secondary text-muted-foreground'
+                )}>
+                  <Flame className="h-3.5 w-3.5" /> {w.streak} 天
+                </span>
+                <span className="flex items-center gap-1 text-xs font-medium rounded-full px-2.5 py-1 bg-amber-100 text-amber-700">
+                  <Trophy className="h-3.5 w-3.5" /> {w.total_wins} 次
+                </span>
+              </div>
+
               <button
                 onClick={() => win(w)}
                 disabled={!!busyId}
@@ -374,9 +386,6 @@ function WinnableHistory({ onClose }: { onClose: () => void }) {
             items.map(w => (
               <div key={w.id} className="rounded-xl border border-border bg-secondary/40 px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0', LEVEL_MAP[w.win_level].cls)}>
-                    {LEVEL_MAP[w.win_level].short}
-                  </span>
                   <p className="text-sm leading-snug">{w.content}</p>
                 </div>
                 <div className="flex items-center gap-3 mt-1.5 text-[11px] text-muted-foreground">
@@ -400,9 +409,8 @@ function WinnableHistory({ onClose }: { onClose: () => void }) {
 
 function QuickAdd({ onAdded, onWinnableAdded }: { onAdded: () => void; onWinnableAdded: () => void }) {
   const [content, setContent] = useState('')
-  const [level, setLevel]     = useState<Win['win_level']>('small')
-  // 选「未来可赢」时，挂成可赢目标用的星级（之后每次「赢一次」按此等级记当日记录）
-  const [winnableLevel, setWinnableLevel] = useState<'small' | 'medium' | 'big'>('small')
+  // 只区分「记录赢」和「未来可赢」两种；具体程度（星星=奖励值）由系统随机抽取
+  const [isFuture, setIsFuture] = useState(false)
   const [saving, setSaving]   = useState(false)
   const [flash, setFlash]     = useState<string | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -412,23 +420,24 @@ function QuickAdd({ onAdded, onWinnableAdded }: { onAdded: () => void; onWinnabl
     if (!trimmed || saving) return
     setSaving(true)
     try {
-      if (level === 'future') {
-        // 未来可赢 → 挂成可赢目标（带星级），不直接写当日记录
-        await api.wins.createWinnable(trimmed, winnableLevel)
-        playWinRecord(winnableLevel)
+      if (isFuture) {
+        // 未来可赢 → 挂成可赢目标，每次「赢一次」程度随机
+        await api.wins.createWinnable(trimmed)
+        playWinRecord('future')
         setContent('')
-        setFlash(`已挂上可赢目标（${LEVEL_MAP[winnableLevel].label}）`)
+        setFlash('已挂上可赢目标')
         setTimeout(() => setFlash(null), 1500)
         onWinnableAdded()
         inputRef.current?.focus()
       } else {
-        await api.wins.create(trimmed, level)
-        playWinRecord(level)
+        // 记录赢 → 程度由系统随机抽取（星星=奖励值）
+        const w = await api.wins.create(trimmed)
+        playWinRecord(w.win_level)
         // 通知搭子聊天栏：记了一条赢，尽快刷新拉取搭子反馈
         window.dispatchEvent(new CustomEvent('agent:dialogue-refresh'))
         setContent('')
-        setFlash(`已记录${LEVEL_MAP[level].label}`)
-        setTimeout(() => setFlash(null), 1500)
+        setFlash(`系统抽到 ${LEVEL_MAP[w.win_level].short} ${LEVEL_MAP[w.win_level].label}！`)
+        setTimeout(() => setFlash(null), 2000)
         onAdded()
         inputRef.current?.focus()
       }
@@ -448,7 +457,7 @@ function QuickAdd({ onAdded, onWinnableAdded }: { onAdded: () => void; onWinnabl
   return (
     <div className="bg-card rounded-2xl border border-border shadow-sm p-5 space-y-4">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">{level === 'future' ? '记录未来可赢' : '记录今天的赢'}</span>
+        <span className="text-sm font-medium">{isFuture ? '记录未来可赢' : '记录今天的赢'}</span>
         {flash && (
           <span className="text-xs text-muted-foreground animate-pulse">
             ✓ {flash}
@@ -456,44 +465,29 @@ function QuickAdd({ onAdded, onWinnableAdded }: { onAdded: () => void; onWinnabl
         )}
       </div>
 
-      {/* 星级选择 — 横排四个 chip */}
+      {/* 类型切换 — 记录赢 / 未来可赢；程度交给系统随机，用户不再手选星级 */}
       <div className="flex gap-2">
-        {LEVELS.map(l => (
-          <button
-            key={l.value}
-            onClick={() => setLevel(l.value)}
-            className={cn(
-              'flex-1 text-xs py-1.5 rounded-lg border font-medium transition-all',
-              level === l.value
-                ? cn(l.cls, 'shadow-sm scale-[1.02]')
-                : 'border-border text-muted-foreground hover:bg-secondary'
-            )}
-          >
-            {l.short} {l.label}
-          </button>
-        ))}
+        <button
+          onClick={() => setIsFuture(false)}
+          className={cn(
+            'flex-1 text-xs py-1.5 rounded-lg border font-medium transition-all flex items-center justify-center gap-1.5',
+            !isFuture ? cn('win-medium', 'shadow-sm scale-[1.02]')
+                      : 'border-border text-muted-foreground hover:bg-secondary'
+          )}
+        >
+          <Trophy className="h-3.5 w-3.5" /> 已赢
+        </button>
+        <button
+          onClick={() => setIsFuture(true)}
+          className={cn(
+            'flex-1 text-xs py-1.5 rounded-lg border font-medium transition-all flex items-center justify-center gap-1.5',
+            isFuture ? cn('win-future', 'shadow-sm scale-[1.02]')
+                     : 'border-border text-muted-foreground hover:bg-secondary'
+          )}
+        >
+          <Target className="h-3.5 w-3.5" /> 待赢
+        </button>
       </div>
-
-      {/* 未来可赢：选「赢一次」时计入当日记录的星级 */}
-      {level === 'future' && (
-        <div className="flex items-center gap-2 rounded-xl bg-indigo-50/40 border border-indigo-200/60 px-3 py-2">
-          <span className="text-[11px] text-muted-foreground shrink-0">赢一次算</span>
-          {LEVELS.filter(l => l.value !== 'future').map(l => (
-            <button
-              key={l.value}
-              onClick={() => setWinnableLevel(l.value as 'small' | 'medium' | 'big')}
-              className={cn(
-                'flex-1 text-xs py-1 rounded-lg border font-medium transition-all',
-                winnableLevel === l.value
-                  ? cn(l.cls, 'shadow-sm scale-[1.02]')
-                  : 'border-border text-muted-foreground hover:bg-secondary'
-              )}
-            >
-              {l.short} {l.label}
-            </button>
-          ))}
-        </div>
-      )}
 
       {/* 输入框 */}
       <div className="relative">
@@ -503,7 +497,7 @@ function QuickAdd({ onAdded, onWinnableAdded }: { onAdded: () => void; onWinnabl
           value={content}
           onChange={e => setContent(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={level === 'future' ? '今天没做好，但以后可以做到什么？' : '今天赢在哪？ — 写完按 Enter 即保存，Shift+Enter 换行'}
+          placeholder={isFuture ? '今天没做好，但以后可以做到什么？' : '今天赢在哪？ — 写完按 Enter，系统随机给你抽个程度'}
           className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-ring/40 transition-shadow leading-relaxed"
           autoFocus
         />
