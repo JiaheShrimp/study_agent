@@ -126,24 +126,49 @@ def _previous_day(day: str) -> str:
     return str(Date.fromisoformat(day) - timedelta(days=1))
 
 
-def pending_lucky_dice_bonus(date: str) -> int:
+def _dice_bonus_entry(reward: dict) -> dict:
+    buff = reward.get("buff") or {}
+    return {
+        "reward_id": reward.get("id", ""),
+        "buff_id": buff.get("id", ""),
+        "name": buff.get("name", ""),
+        "emoji": buff.get("emoji", ""),
+        "desc": buff.get("desc", ""),
+        "task_id": reward.get("task_id", ""),
+        "task_content": reward.get("task_content", ""),
+        "task_type": reward.get("task_type", ""),
+    }
+
+
+def pending_lucky_dice_rewards(date: str) -> list[dict]:
+    """Lucky dice rewards earned yesterday and not yet consumed by today's bonus roll."""
     prev = _previous_day(date)
-    total = 0
+    rewards: list[dict] = []
     for reward in load_buff_rewards():
         if reward.get("date") != prev:
             continue
         if reward.get("dice_consumed_date"):
             continue
         if (reward.get("buff") or {}).get("id") == "lucky_dice":
-            total += 1
-    return total
+            rewards.append(reward)
+    return rewards
 
 
-def consume_lucky_dice_bonus(date: str, rolls: list[int]) -> tuple[list[int], int]:
-    bonus = pending_lucky_dice_bonus(date)
+def pending_lucky_dice_bonus(date: str) -> int:
+    return len(pending_lucky_dice_rewards(date))
+
+
+def pending_lucky_dice_bonus_details(date: str) -> list[dict]:
+    return [_dice_bonus_entry(reward) for reward in pending_lucky_dice_rewards(date)]
+
+
+def consume_lucky_dice_bonus(date: str, rolls: list[int]) -> tuple[list[int], int, list[dict]]:
+    pending = pending_lucky_dice_rewards(date)
+    bonus = len(pending)
     if bonus <= 0:
-        return rolls, 0
+        return rolls, 0, []
 
+    details = [_dice_bonus_entry(reward) for reward in pending]
     adjusted = [min(5, max(1, int(v) + bonus)) for v in rolls]
     rewards = load_buff_rewards()
     prev = _previous_day(date)
@@ -158,4 +183,4 @@ def consume_lucky_dice_bonus(date: str, rolls: list[int]) -> tuple[list[int], in
             reward["applied_at"] = reward.get("applied_at") or now
             reward["dice_consumed_date"] = date
     save_buff_rewards(rewards)
-    return adjusted, bonus
+    return adjusted, bonus, details

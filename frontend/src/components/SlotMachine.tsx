@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type DailyBonus } from '@/lib/api'
+import { api, type DailyBonus, type DiceBonusBuff } from '@/lib/api'
 import { cn, gameToday } from '@/lib/utils'
 import { playSlotTick, playReelStop, playSlotComplete, playClick } from '@/lib/sounds'
 
@@ -179,17 +179,24 @@ function Reel({
 // ── 主组件 ────────────────────────────────────────────────────
 
 interface Props {
+  pendingDiceBuffs?: DiceBonusBuff[]
   onComplete: (bonus: DailyBonus) => void
   onSkip: () => void
 }
 
-export function SlotMachine({ onComplete, onSkip }: Props) {
+export function SlotMachine({ pendingDiceBuffs = [], onComplete, onSkip }: Props) {
   const [phase, setPhase] = useState<'idle' | 'spinning' | 'done'>('idle')
   const [rolls, setRolls] = useState<number[]>([1, 1, 1])
   const [stoppedCount, setStoppedCount] = useState(0)
   const [saving, setSaving] = useState(false)
 
+  const pendingDiceBonus = pendingDiceBuffs.length
   const multiplier = phase === 'done' ? calcMultiplier(rolls) : null
+  const boostedRolls = pendingDiceBonus > 0
+    ? rolls.map(v => Math.min(5, Math.max(1, v + pendingDiceBonus)))
+    : rolls
+  const boostedMultiplier = phase === 'done' ? calcMultiplier(boostedRolls) : null
+  const finalMultiplier = boostedMultiplier ?? multiplier
 
   function handleSpin() {
     playClick()
@@ -230,10 +237,10 @@ export function SlotMachine({ onComplete, onSkip }: Props) {
   }
 
   const label =
-    !multiplier ? '' :
-    multiplier >= 2.5 ? '🔥 今天是大爆发日！' :
-    multiplier >= 2.0 ? '✨ 今天状态不错！' :
-    multiplier >= 1.5 ? '👍 稳扎稳打' :
+    !finalMultiplier ? '' :
+    finalMultiplier >= 2.5 ? '🔥 今天是大爆发日！' :
+    finalMultiplier >= 2.0 ? '✨ 今天状态不错！' :
+    finalMultiplier >= 1.5 ? '👍 稳扎稳打' :
                         '💪 平凡中见伟大'
 
   return (
@@ -251,6 +258,20 @@ export function SlotMachine({ onComplete, onSkip }: Props) {
             <h2 className="text-xl font-bold">转动命运之轮</h2>
             <p className="text-xs text-muted-foreground">今天的奖励倍数由它决定</p>
           </div>
+
+          {pendingDiceBonus > 0 && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+              <div className="flex items-center justify-center gap-2 text-sm font-semibold">
+                <span>{pendingDiceBuffs[0]?.emoji || '🎰'}</span>
+                <span>{pendingDiceBuffs[0]?.name || '幸运加注'} 待生效：结算时骰子 +{pendingDiceBonus}</span>
+              </div>
+              {pendingDiceBuffs[0]?.task_content && (
+                <p className="mt-1 text-center text-[11px] text-amber-700">
+                  来自昨天完成的「{pendingDiceBuffs[0].task_content}」
+                </p>
+              )}
+            </div>
+          )}
 
           {/* 三个滚轮 */}
           <div className="flex justify-center gap-3">
@@ -271,10 +292,21 @@ export function SlotMachine({ onComplete, onSkip }: Props) {
             {phase === 'done' && multiplier ? (
               <div className="space-y-1 animate-in fade-in zoom-in-95 duration-300">
                 <p className="text-5xl font-black tracking-tight text-primary leading-none">
-                  {multiplier.toFixed(1)}
+                  {finalMultiplier?.toFixed(1)}
                   <span className="text-xl font-bold text-muted-foreground ml-1">×</span>
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">{label}</p>
+                {pendingDiceBonus > 0 && (
+                  <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                    <p className="font-medium">
+                      正常结果 {rolls.join(' / ')} = {multiplier.toFixed(1)}×
+                    </p>
+                    <p className="mt-0.5">
+                      {pendingDiceBuffs[0]?.emoji || '🎰'} {pendingDiceBuffs[0]?.name || '幸运加注'} +{pendingDiceBonus}
+                      {' '}→ {boostedRolls.join(' / ')} = {boostedMultiplier?.toFixed(1)}×
+                    </p>
+                  </div>
+                )}
               </div>
             ) : phase === 'spinning' ? (
               <p className="text-sm text-muted-foreground animate-pulse">转动中…</p>
@@ -304,7 +336,7 @@ export function SlotMachine({ onComplete, onSkip }: Props) {
                 disabled={saving}
                 className="w-full h-12 rounded-2xl font-semibold text-sm bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm active:scale-[0.98] transition-all"
               >
-                {saving ? '保存中…' : `好的，今天 ${multiplier?.toFixed(1)}× 出发！`}
+                {saving ? '保存中…' : `好的，今天 ${finalMultiplier?.toFixed(1)}× 出发！`}
               </button>
             )}
             <button

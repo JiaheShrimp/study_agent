@@ -33,26 +33,26 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 # 固定人设：一个真正了解你这个人、陪着你成长的「搭子」，不是上司、不是监工。
 SUPERVISOR_SYSTEM = (
     "你是一个游戏化成长 App 里住着的小伙伴——用户的老朋友、搭子，而不是监工或老师。\n"
-    "下面会给你他在 App 里记录的**全部**进步、专注时长、习惯打卡。"
+    "下面会给你他在 App 里记录的**全部**进步、专注时长、习惯打卡和最近对话。"
     "请把这些当成你对这个人的全部了解：你知道他这段时间都在忙什么、"
     "在意什么、有过哪些高光、哪些事一直在坚持。\n"
     "你的性格：真诚、有人味、偶尔俏皮，会真心为他的进步高兴，也会半开玩笑地损他一下"
     "——但绝不说教、不喊口号、不像班主任。\n"
-    "下面资料末尾可能有一段【可量化数据洞察】——那是已经替你算好的确切数字"
-    "（历史最长专注是哪天、距破纪录还差几分钟、近一周日均、连续多少天……）。\n"
+    "下面资料末尾可能有一段【可引用数据事实】——那是已经替你算好的结构化事实卡片，"
+    "每条都有 type、scope、metric、unit、meaning 等字段。\n"
     "硬性要求：\n"
     "1. 只输出一句话，最多 40 个字，像朋友发微信一样随口一说；不要解释、不要列点、不要加引号。\n"
-    "2. 从他的**整体记录**里自由挑你想聊的点说具体的话——可以是某件让你印象深刻的事、"
+    "2. 优先回应这次发生的具体事；如果能自然联想到他的历史记录，就顺手带一点。"
+    "不要只复述『又记录了一条』『完成了一个任务』这类界面动作。\n"
+    "3. 从他的整体记录里自由挑你想聊的点说具体的话——可以是某件让你印象深刻的事、"
     "某个长期坚持的习惯、某段时间的状态，甚至把几件事串起来调侃。"
-    "不用拘泥于他今天做了什么；今天没什么内容就聊别的，别硬凑今天。\n"
-    "3. **偶尔**（不是每次）可以结合那段数据洞察，抛一个具体数字给他——"
-    "比如『你历史最长是 12 天前那次 90 分钟，今天再撑 20 分就破了』『你这周日均比上周少了 15 分，最近偷懒了啊』。"
-    "数字要直接用算好的，别自己瞎编；可以正面打气，也可以调侃/小损一下。"
-    "但别每条都报数据、别像播报员，多数时候还是像朋友闲聊。\n"
-    "4. 措辞每次都要新——同样的意思换不同说法，绝不套模板、不重复你之前说过的话。\n"
-    "5. 让他感觉你是真的认识他这个人、记得他做过的事，而不是一个只会套话的机器人。\n"
-    "6. 禁止说『加油』『好好学习』『快去写作业』这类空泛、说教、命令式的话。\n"
-    "7. 用中文，可以带一点 emoji 但别超过一个。"
+    "今天没什么内容就聊别的，别硬凑今天。\n"
+    "4. **偶尔**（不是每次）可以参考那段数据事实来判断他的状态、节奏或变化，"
+    "再自然地给反馈；不要求报数字。引用数字时按事实卡片的 scope/metric/unit/meaning 理解口径，不要自己计算。\n"
+    "5. 措辞每次都要新——同样的意思换不同说法，绝不套模板、不重复你之前说过的话。\n"
+    "6. 让他感觉你是真的认识他这个人、记得他做过的事，而不是一个只会套话的机器人。\n"
+    "7. 禁止说『加油』『好好学习』『快去写作业』这类空泛、说教、命令式的话。\n"
+    "8. 用中文，可以带一点 emoji 但别超过一个。"
 )
 
 # ─────────────────────────────────────────────────────────────
@@ -64,13 +64,12 @@ SUPERVISOR_SYSTEM = (
 #               （win_created 例外：记赢必回，cooldown=0）
 #   - scene:    场景构造器 (context)->str，只描述「这次发生了什么」；
 #               业务数据/对话历史由 _history_messages 统一注入，不在这里拼
-#   - fallback: AI 不可用/超时时的兜底文案池（伙伴口吻，不说教）
 #
 # 加新触发点：在 TRIGGERS 里加一条 Trigger，然后在业务函数里调 supervisor_react("xxx", {...})。
 # 不用改任何分发/冷却逻辑。
 # ─────────────────────────────────────────────────────────────
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
 
@@ -79,7 +78,6 @@ class Trigger:
     prob: float
     cooldown: int                       # 全局冷却秒数（距上次搭子发言）
     scene: Callable[[dict], str]
-    fallback: list[str] = field(default_factory=list)
 
 
 def _scene_win(context: dict) -> str:
@@ -171,39 +169,30 @@ def _scene_task_event(context: dict) -> str:
 TRIGGERS: dict[str, Trigger] = {
     "win_created": Trigger(
         prob=1.0, cooldown=0, scene=_scene_win,
-        fallback=["看到啦，这条记下了，挺好的。👀", "嘿，又赢了一把，我有在认真看哦。",
-                  "记下来了，这种感觉是不是还挺爽的。", "不错呀，这一笔我替你高兴。"],
     ),
     "task_start": Trigger(    # 计时开始：已注册待接入，暂无后端 hook
         prob=0.25, cooldown=1800, scene=_scene_task_start,
-        fallback=["开整啦，我陪着。", "走起，我在这看着。"],
     ),
     "idle": Trigger(
         prob=1.0, cooldown=0, scene=_scene_idle,   # 主动说话：频率由后台定时器控制
-        fallback=["在忙啥呢，冒个泡。", "我突然想起你前两天那条记录，挺有意思。"],
     ),
 
     # ── 统一任务事件（所有类型任务共用一个 scene，按 kind 分粒度） ──
     # 完成：任何类型必反馈（emit_task_event 里 force=True，prob/cooldown 不参与）
     "task_completed": Trigger(
         prob=1.0, cooldown=0, scene=_scene_task_event,
-        fallback=["搞定一个，舒服。", "这件事画上句号啦，不错。", "完成了哈，我看着呢。"],
     ),
     # 中断/力竭：沿用旧的概率与冷却（别在失败时连环唠叨）
     "task_aborted": Trigger(
         prob=0.6, cooldown=900, scene=_scene_task_event,
-        fallback=["没关系，停一下也正常。", "今天先这样，回头再说。", "嗯，状态有起伏很正常。"],
     ),
     # 新增：必反馈（emit_task_event 里 force=True）
     "task_created": Trigger(
         prob=1.0, cooldown=0, scene=_scene_task_event,
-        fallback=["新任务记下啦，回头一起搞定。", "嗯，又给自己安排上了，我看着呢。",
-                  "这条加进来了，不急，一步步来。"],
     ),
     # 删除：低概率 + 冷却，避免连删/改错重加时刷屏
     "task_deleted": Trigger(
         prob=0.2, cooldown=600, scene=_scene_task_event,
-        fallback=["删了就删了，没事。", "嗯，去掉一个，轻装上阵。"],
     ),
 }
 
@@ -237,7 +226,12 @@ def emit_task_event(kind: str, task_type: str, **payload) -> None:
     supervisor_react(trigger, context, force=force)
 
 
-def _history_messages(extra_user: str) -> list[dict]:
+def _history_messages(
+    extra_user: str,
+    *,
+    allow_data_steer: bool = True,
+    include_dialogue: bool = True,
+) -> list[dict]:
     """
     把搭子的全部业务数据 + 你俩最近的对话历史，组装成发给 AI 的 messages。
 
@@ -265,53 +259,64 @@ def _history_messages(extra_user: str) -> list[dict]:
         },
     ]
 
-    # 拼记忆对话：今天的全部 + 更早历史的随机抽样（学习语料，让回复更人性化）。
-    # 含搭子自己的回复，这样它知道说过什么、避免今天内重复。
-    for t in ai_dialogue.memory_turns(today_limit=16, past_sample=6):
-        role = t.get("role")
-        content = t.get("content", "")
-        if role in ("user", "assistant") and content:
-            messages.append({"role": role, "content": content})
+    # 最近聊天只作为“上下文摘要”注入，不再把旧 assistant 回复按原角色塞回 prompt。
+    # 否则模型会把历史回复当成风格样本，旧兜底/模板句会污染新回复。
+    if include_dialogue:
+        note_lines: list[str] = []
+        for t in ai_dialogue.memory_turns(today_limit=12, past_sample=0):
+            role = t.get("role")
+            content = str(t.get("content", "")).strip()
+            trigger = str(t.get("trigger", "")).strip()
+            if not content:
+                continue
+            if role == "user":
+                note_lines.append(f"- 用户：{content}")
+            elif role == "assistant" and trigger == "chat":
+                note_lines.append(f"- 你上一轮聊天回复：{content}")
+        if note_lines:
+            messages.append({
+                "role": "user",
+                "content": (
+                    "（最近聊天上下文，只用于理解正在聊什么；它不是写作模板，"
+                    "不要模仿里面任何句式。）\n" + "\n".join(note_lines[-12:])
+                ),
+            })
 
-    # 「偶尔报数据」由这里的随机引导落地（≈35% 概率），而不是靠模型自觉——
-    # 命中时强力要求这一句结合一个具体数字洞察；否则明确叫它别报数据、就闲聊。
-    # 这样"偶尔"是可控的、且每次措辞不同，不会变成每条都念数据的播报员。
-    steer = _data_steer()
+    # 「偶尔报数据」只做轻量引导。数字容易被模型错配概念，所以命中率压低；
+    # 没命中时不额外干预，让模型主要靠完整历史自由发挥。
+    steer = _data_steer() if allow_data_steer else None
     extra = extra_user if not steer else (extra_user + "\n\n" + steer)
 
     messages.append({"role": "user", "content": extra})
     return messages
 
 
-# 命中时把这一句拽向「用一个具体数字」，并给几种不同口吻避免套路化
+# 命中时提醒模型参考相关事实做判断，而不是为了显得有数据而硬报数字。
 _DATA_STEER_HIT = [
-    "（这次结合上面【数据洞察】里的某一条，自然地抛一个具体数字给我——正面打气或调侃我都行，但只说一句、别像播报。）",
-    "（这次挑一个算好的数字说，比如距纪录还差多少、这周日均变化、连续多少天，包装成朋友随口一提。）",
-    "（这次用一个硬数据损我一下或夸我一下，数字要准，话要短。）",
-    "（这次结合数据洞察里的一条，给我点具体的——别空泛，落到分钟/天数/条数上。）",
-]
-_DATA_STEER_MISS = [
-    "（这次别报数据、别提数字，就像朋友闲聊一样随口说一句。）",
-    "（这次不用扯统计，挑件我记录里具体的事聊就行。）",
+    "（如果上面【可引用数据事实】里有和这次场景相关的内容，可以参考它来判断状态或变化，再自然反馈；不必报数字。）",
+    "（可以结合相关数据事实分析一下这次操作背后的节奏、状态或趋势；数字只有自然时才说。）",
 ]
 
 
 def _data_steer() -> str | None:
-    """随机决定这次要不要引导搭子结合数据说话（≈35% 命中报数据）。"""
+    """低概率引导搭子结合数据说话。大多数时候让它自由发挥。"""
     import random as _r
-    roll = _r.random()
-    if roll < 0.35:
+    if _r.random() < 0.15:
         return _r.choice(_DATA_STEER_HIT)
-    # 其余大多数时候，明确叫它别报数据，保证"偶尔"而非"老报"
-    if roll < 0.70:
-        return _r.choice(_DATA_STEER_MISS)
-    return None  # 剩下的不加引导，完全自由发挥
+    return None
 
 
-def _generate(extra_user: str, *, fallback_pool: list[str]) -> str:
+AI_REPLY_FAILED = "AI 调用失败，请稍后再试。"
+
+
+def _generate(
+    extra_user: str,
+    *,
+    allow_data_steer: bool = True,
+    include_dialogue: bool = True,
+) -> str | None:
     """
-    带对话历史生成一句搭子的话；AI 不可用/失败时回退到兜底文案。
-    超时重试一次，降低撞兜底概率。
+    带对话历史生成一句搭子的话；AI 不可用/失败时返回 None，由调用方显示失败。
 
     注意 max_tokens：部分模型是「推理模型」（如 deepseek-v4-pro / o1 系列），
     会先用大量 token 内部思考（reasoning_content）再输出正式回复（content）。
@@ -320,13 +325,17 @@ def _generate(extra_user: str, *, fallback_pool: list[str]) -> str:
     """
     if ai_client.is_available():
         for _ in range(2):
-            messages = _history_messages(extra_user)
+            messages = _history_messages(
+                extra_user,
+                allow_data_steer=allow_data_steer,
+                include_dialogue=include_dialogue,
+            )
             line = ai_client.chat_messages(messages, system=SUPERVISOR_SYSTEM, max_tokens=800)
             if line:
                 line = line.strip().strip('"“”\'')
                 if line:
                     return line
-    return random.choice(fallback_pool or ["……"])
+    return None
 
 
 def _react_sync(trigger: str, context: dict) -> None:
@@ -334,8 +343,8 @@ def _react_sync(trigger: str, context: dict) -> None:
     try:
         t = TRIGGERS.get(trigger)
         scene = t.scene(context) if t else "请随口跟我说一句。"
-        line = _generate(scene, fallback_pool=(t.fallback if t else []))
-        ai_dialogue.append_turn("assistant", line, trigger=trigger)
+        line = _generate(scene, include_dialogue=False)
+        ai_dialogue.append_turn("assistant", line or AI_REPLY_FAILED, trigger=trigger)
     except Exception:
         # 搭子出错绝不能影响主流程
         pass
@@ -456,11 +465,21 @@ _TOOL_HINT = (
 )
 
 
-def _plain_chat() -> str:
+def _plain_chat(user_msg: str = "") -> str:
     """普通闲聊：带历史和业务数据生成一句话（AI 不可用时兜底）。"""
+    if user_msg:
+        scene = (
+            f"用户刚发来的聊天消息：{user_msg}\n"
+            "把它当成普通聊天来接，不是任务事件，也不是记录反馈。"
+            "你可以自然使用你掌握的后台资料，但只有当它真的接得上这句话时才提。"
+        )
+    else:
+        scene = (
+            "继续当前聊天。后台资料只是你的记忆，不是这次回复必须提到的主题。"
+        )
     return _generate(
-        "（请像朋友一样回复我上面这条消息，结合你对我的了解，自然地接着聊。）",
-        fallback_pool=["嗯嗯，我在听。", "哈哈，说说看？", "我懂你的意思。", "这个我记下了。"],
+        scene,
+        allow_data_steer=False,
     )
 
 
@@ -474,7 +493,7 @@ def _run_tool_via_json(tool_name: str) -> tuple[str, dict] | None:
     extract = ai_tools.json_extract_prompt(tool_name)
     if not extract:
         return None
-    messages = _history_messages(extract)
+    messages = _history_messages(extract, allow_data_steer=False)
     raw = ai_client.chat_messages(messages, system=SUPERVISOR_SYSTEM, max_tokens=800)
     if not raw:
         return None
@@ -494,7 +513,7 @@ def _run_tool_via_json(tool_name: str) -> tuple[str, dict] | None:
         return None
     tr = ai_tools.execute_tool(tool_name, args)
     if tr.ok:
-        return (tr.reply or "好嘞，给你安排上了。"), tr.meta
+        return (tr.reply or "已执行。"), tr.meta
     return None
 
 
@@ -514,7 +533,7 @@ def _chat_react(user_msg: str) -> tuple[str, dict]:
     import ai_tools
 
     if not ai_client.is_available():
-        return _plain_chat(), {}
+        return AI_REPLY_FAILED, {}
 
     # 路径 1：意图命中 → JSON 提取落地（最稳）
     forced = ai_tools.match_forced_tool(user_msg)
@@ -522,14 +541,19 @@ def _chat_react(user_msg: str) -> tuple[str, dict]:
         done = _run_tool_via_json(forced)
         if done is not None:
             return done
-        # 提取/落地失败 → 退回闲聊，不卡住用户
-        return _plain_chat(), {}
+        return AI_REPLY_FAILED, {}
 
     # 路径 2：没命中意图 → 原生 FC auto，让模型自己判断
     if not ai_client.supports_tools():
-        return _plain_chat(), {}
+        text = _plain_chat(user_msg)
+        return (text or AI_REPLY_FAILED), {}
 
-    messages = _history_messages("（这是我刚发给你的话，请按需要决定聊天或调用工具。）")
+    messages = _history_messages(
+        f"用户刚发来的聊天消息：{user_msg}\n"
+        "判断这是不是需要调用工具的请求；如果不是，就当普通聊天自然回复。"
+        "后台资料只是记忆，不要为了展示数据而强行提数据。",
+        allow_data_steer=False,
+    )
     result = ai_client.chat_with_tools(
         messages,
         tools=ai_tools.openai_tools_spec(),
@@ -538,7 +562,7 @@ def _chat_react(user_msg: str) -> tuple[str, dict]:
         tool_choice="auto",
     )
     if result is None:
-        return _plain_chat(), {}
+        return AI_REPLY_FAILED, {}
 
     calls = result.get("tool_calls") or []
     if calls:
@@ -552,13 +576,13 @@ def _chat_react(user_msg: str) -> tuple[str, dict]:
                     reply_parts.append(tr.reply)
         if reply_parts:
             return "；".join(reply_parts), meta
-        return (result.get("text") or "好嘞，我看看哈。").strip(), meta
+        return ((result.get("text") or "").strip() or AI_REPLY_FAILED), meta
 
     # 没调工具：用模型的自然语言回复（空则兜底）
     text = (result.get("text") or "").strip()
     if not text:
-        text = _plain_chat()
-    return text, {}
+        text = _plain_chat(user_msg)
+    return (text or AI_REPLY_FAILED), {}
 
 
 @router.post("/chat", response_model=ChatOut)

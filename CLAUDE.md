@@ -1,646 +1,175 @@
-# Agent 项目指南
+﻿# Agent Project Notes
 
-本文档是 Claude Code 的工作规范，每次对话都会自动加载。所有代码风格、架构决策、命名约定以此为准。
+这个文件是给后续维护用的短版项目手册。不要写成完整产品说明书，只保留会影响开发判断的约定、入口和当前实现状态。
 
----
+## 项目定位
 
-## 项目简介
-
-一个游戏化的个人成长 Agent。通过每日抽奖倍数、任务追踪、赢麻了记录、追逐式计时器等机制，把枯燥的自我管理变得有趣。用户每天打开时抽取当日倍数，完成任务获得激励，记录进步积累成就感。后期接入 AI 做趋势分析和目标规划。
-
----
+游戏化个人成长 Agent。核心循环是：每天抽老虎机倍数，记录「赢麻了」，完成每日/保留/赏金/常规任务，获得分数和可兑现 buff。全局 AI「搭子」能看到后台数据，像朋友一样聊天和反馈操作。
 
 ## 技术栈
 
-| 层级 | 选型 | 备注 |
-|------|------|------|
-| 后端语言 | Python 3.12 | Miniconda 环境 |
-| 后端框架 | FastAPI + uvicorn | REST API，热重载 |
-| AI 客户端 | urllib（内置）| 零依赖，支持 Anthropic / OpenAI 兼容所有 provider |
-| 存储 | JSON 文件 | 后期可迁移 SQLite |
-| 前端框架 | React 19 + Vite + TypeScript | |
-| UI 组件 | shadcn/ui + Tailwind CSS v3 | 暖米白纸质感配色 |
-| 图表 | Recharts | 分析页柱状图 |
-| 路由 | react-router-dom v7 | |
-| 字体 | 霞鹜文楷 Screen + Inter | 本地打包（`lxgw-wenkai-screen-webfont` + `@fontsource/inter`），中文用文楷、拉丁用 Inter |
-| 桌面托盘 | pystray + Pillow | 托盘启动，无黑窗口 |
-| 通知 | winotify | Windows 原生 Toast |
-| 音效 | Web Audio API | 纯代码合成，无外部音频文件 |
+- 后端：Python + FastAPI + JSON 文件存储。
+- 前端：React + Vite + TypeScript + Tailwind。
+- AI：`backend/ai_client.py`，走配置里的 provider/model/key，支持普通聊天和 OpenAI-compatible tools。
+- 后端入口：`backend/main.py`。
+- 前端入口：`frontend/src/App.tsx`。
+- API 封装：`frontend/src/lib/api.ts`。
 
----
+## 启动
 
-## 项目结构
+后端：
 
-```
-agent/
-├── app.py                   # 托盘启动器，双击 启动.vbs 运行
-├── 启动.vbs                 # 静默启动脚本（本地，不上传 git）
-├── backend/
-│   ├── main.py              # FastAPI 入口，注册所有 router
-│   ├── routers/
-│   │   ├── wins.py          # 赢麻了 API（CRUD + 统计）
-│   │   ├── bonus.py         # 每日倍数抽奖 API（含 lucky_dice 次日骰子加成消费）
-│   │   ├── tasks.py         # 任务系统 API（模板/当日/赏金/执行记录/常规/目标）
-│   │   └── config.py        # 提醒 + 工作休息 + 有效时间口径 配置 API
-│   ├── storage/
-│   │   ├── records.py       # wins.json 读写
-│   │   ├── tasks.py         # 任务相关 JSON 读写（含 routines / daily_exclude / goal_state）
-│   │   ├── buffs.py         # Buff 模板定义 + 已实现随机池 + random_buff()
-│   │   ├── buff_rewards.py  # Buff 奖励记录（弹窗揭露/防重复）
-│   │   ├── buff_effects.py  # Buff 效果执行器（分数加成/次日骰子）
-│   │   └── config.py        # config.json 读写
-│   └── data/                # 所有 JSON 数据文件（不上传 git）
-│       ├── wins.json
-│       ├── config.json      # reminder / work_mins / rest_mins / effective_time_mode
-│       ├── task_templates.json
-│       ├── daily_tasks.json # 按日期分组的当日任务，含 run_status
-│       ├── bounty_pool.json
-│       ├── daily_bounties.json
-│       ├── task_runs.json   # 任务执行记录（含 started_at/ended_at/actual_seconds/source/buff_effects）
-│       ├── buff_rewards.json # Buff 奖励记录（revealed/applied/dice_consumed_date）
-│       ├── routines.json    # 常规任务列表 + max_routines / fail_days_limit
-│       ├── daily_exclude.json  # {"YYYY-MM-DD": "排除理由"}
-│       └── goal_state.json  # 爬坡目标状态（goal_secs / streaks / params）
-├── frontend/
-│   ├── src/
-│   │   ├── main.tsx
-│   │   ├── App.tsx          # 路由 + 老虎机逻辑（8点后触发，后端无响应则不弹）
-│   │   ├── index.css        # 全局样式 + CSS 变量（暖米白配色）
-│   │   ├── lib/
-│   │   │   ├── api.ts       # 所有后端请求封装（含类型定义）
-│   │   │   ├── sounds.ts    # Web Audio API 音效合成（无外部文件）
-│   │   │   └── utils.ts     # cn() 工具
-│   │   ├── components/
-│   │   │   ├── layout/      # AppLayout（含今日倍数条）, Sidebar, BottomNav
-│   │   │   ├── ui/          # Button, Card, Dialog, Select
-│   │   │   ├── SlotMachine.tsx    # 每日抽奖老虎机弹窗
-│   │   │   ├── TaskRunner.tsx     # 任务追逐计时器（时间戳计时 + 圆形跑道 + PiP 悬浮窗 + localStorage 关窗恢复）
-│   │   │   ├── DayTimeline.tsx    # 今日时间轴（Dashboard 展示，竖排）
-│   │   │   └── StudyGoalCard.tsx  # 有效学习时间 + 爬坡目标卡片（compact / 详细）
-│   │   └── pages/
-│   │       ├── Dashboard.tsx      # 首页（问候 + 倍数卡 + 目标卡 + 功能入口 + 时间轴）
-│   │       ├── Wins.tsx           # 赢麻了（月历 + 记录 + 新增 + 分析抽屉）
-│   │       ├── Tasks.tsx          # 每日任务（日历切换历史 + 常规任务 + 当日任务 + 赏金）
-│   │       │                      # （TasksManage 任务模板库已删除）
-│   │       └── Placeholder.tsx    # Plan 占位页
-│   ├── package.json
-│   └── vite.config.ts       # /api → localhost:8000 代理
-└── CLAUDE.md
-```
-
----
-
-## 启动方式
-
-**后端**（终端 1）：
-```
+```bash
 cd backend
 python -m uvicorn main:app --reload
 ```
 
-**前端**（终端 2）：
-```
+前端：
+
+```bash
 cd frontend
-npm install   # 首次
 npm run dev
 ```
 
-访问 `http://localhost:5173`
+访问 `http://localhost:5173`。
 
-**托盘启动**（日常使用）：
-双击 `启动.vbs`，静默启动前后端，3 秒后自动打开浏览器，系统托盘显示图标。
+## 数据文件
 
----
+数据基本都在 `backend/data/`，不应提交到 git。
 
-## 核心概念与命名约定
+- `ai_dialogue.json`：聊天栏历史和业务触发反馈。
+- `buff_rewards.json`：任务完成后获得的 buff 奖励记录。
+- `config.json`：AI 配置、每日老虎机结果等。
+- `daily_tasks.json` / `task_runs.json` / `routines.json`：任务与执行记录。
+- `wins.json` / `winnables.json`：赢麻了和未来可赢。
 
-| 业务概念 | 代码命名 | 说明 |
-|----------|----------|------|
-| 今日进步记录 | `win` | 单条赢麻了记录 |
-| 进步等级 | `win_level` | `small` / `medium` / `big` / `future` |
-| 星星数 | `stars` | small=1, medium=2, big=3, future=0 |
-| 每日倍数 | `daily_bonus` / `multiplier` | 1.0-3.0，三数平均映射 |
-| 游戏日 | game date | 以每天 **00:00** 为起点，与自然日对齐 |
-| 任务模板 | `task_template` | 每天自动复制到当日任务的模板 |
-| 当日任务 | `daily_task` | 当天的具体任务实例，可编辑 |
-| 赏金任务 | `bounty_task` | 每天随机抽取 0-2 个，可接受/跳过，携带 buff |
-| 常规任务 | `routine_task` | 习惯养成任务，有连续打卡/目标天数/连续失败警告，紫色主题 |
-| 任务执行 | `task_run` | 一次任务的完整执行记录（TaskRunner 或手动勾选） |
-| 执行来源 | `source` | `runner`=倒计时完成 / `manual`=直接勾选完成 / `routine`=常规任务打卡 / `bounty`=赏金任务 |
-| 计入有效时间 | `count_in_effective` | 任务及对应 task_run 上的布尔字段；`false` 时不计入有效学习时间统计，时间轴仍显示 |
-| 任务结果 | `run_status` | `none` / `running_failed` / `completed` |
-| 工作段 | work block | 配置项，用于换算休息预算总额（默认 30 分钟）；计时本身不再分段 |
-| 休息预算 | rest budget | 总额 = 按预计时长换算（`预计时长 / work_mins × rest_mins`），开局一次性给满；**仅在用户手动点暂停时消耗**（与窗口前后台无关），耗尽则失败；以剩余时间（mm:ss）显示。例：1h 任务、每 30min 休息 5min → 10 分钟 |
-| 进行中快照 | `ActiveRunSnapshot` | 计时进行中实时写入 localStorage（`agent.activeRun`）的进度，用于关窗后恢复或判中断 |
-| 结束原因 | `end_reason` | `complete`=跑到终点 / `early`=提前完成 / `giveup`=中断 / `failed`=力竭倒下 |
-| 有效学习时间 | effective time | 实际口径（actual_seconds）或计划口径（min(actual, task_hours×3600)） |
-| 排除日 | excluded date | 不计入目标计算的日期，需填写理由。现由系统监测「待裁定区间」弹窗整段裁定写入（跳过=skip），不再手动勾选 |
-| 待裁定区间 | pending gap | 上次正常结算后**第一个未达标日到昨天**的整段（含没开 app 的 0 天，天然落在内）。重开 app 时**一个弹窗、一次理由**对整段裁定「跳过(整段不计入)/算中断(整段计未达标)」 |
-| 学习目标 | goal | 爬坡机制：每日单阈值，达标+step_mins，连续未达标超限则降级 |
-| 奖励点数 | score | 每次任务完成后计算，失败/中断为 0 |
-| Buff | buff | 赏金任务必得；普通/保留/常规任务 20% 概率抽取的奖励加成。只有已接入结算的类型进入随机池 |
-| 漏打结算 | settlement | 常规任务漏打的历史日：未打卡即计失败；放假/没开 app 的整段由学习时长弹窗一并裁定为请假（excused）桥接或中断（missed）。不再有独立的常规任务结算弹窗 |
+## 模块地图
 
----
+后端：
 
-## 游戏化机制
+- `backend/routers/ai.py`：AI 搭子、聊天、业务触发反馈、工具调用。
+- `backend/supervisor_context.py`：给 AI 的后台数据摘要。
+- `backend/supervisor_stats.py`：Python 预先算好的结构化数据事实。
+- `backend/routers/tasks.py`：任务系统主逻辑。
+- `backend/routers/bonus.py`：每日老虎机倍数，包含次日骰子 buff 消费。
+- `backend/storage/buffs.py`：buff 模板池。
+- `backend/storage/buff_effects.py`：buff 兑现逻辑。
 
-### 每日抽奖（已实现）
-- 每天**零点后**第一次打开自动弹出老虎机
-- 三个滚轮各抽 1-5（权重递减），平均值映射到 1.0-3.0×
-- 游戏日以零点为界，与自然日对齐
-- 当天倍数显示在全局顶部条 + Dashboard 卡片
-- **容错**：后端无响应时不弹老虎机（不报错）；保存成功才关闭弹窗
-- **音效**：滚动 tick → 每轮停止和弦音 → 全停琶音（倍数越高越高亢）
+前端：
 
-### 赢麻了（已实现）
-- **小赢** ★：做到了一件事
-- **中赢** ★★：明显进步
-- **特大赢** ★★★：重大突破
-- **未来可赢** ◇：今天没做好，但以后可以做到（0 星，靛蓝配色，不计入星数统计）
-- **程度由系统随机抽取（用户不再手选星级）**：QuickAdd 只切「记录赢 / 未来可赢」两种类型，不再有星级 chip。「记录赢」时后端 `create_win` 从 `{small, medium, big}` 随机抽一个程度（`_roll_level()`，星星=奖励值），前端用返回的 `win_level` 播音效 + 闪一下「系统抽到 ★★ 中赢！」。`win_level="future"` 仍由前端走 `createWinnable` 单独处理，不随机
-- 月历视图：有星数的日期显示 ★ N，只有未来可赢的日期显示 ◇
-- 分析抽屉：等级分布中 small/medium/big 按比例展示，future 单独列于分隔线下方
-- 记录成功时有音效，星级越高音符越多越响亮
+- `frontend/src/components/ChatSidebar.tsx`：全局聊天栏。
+- `frontend/src/components/SlotMachine.tsx`：每日老虎机和 buff 结算展示。
+- `frontend/src/pages/Tasks.tsx`：任务页。
+- `frontend/src/pages/Wins.tsx`：赢麻了页。
+- `frontend/src/components/BountyPopup.tsx`：全局赏金弹窗。
 
-### 可赢目标（已实现）
-- 挂在赢麻了页面的「未来可赢」，类似常规任务但更轻：靛蓝（indigo）主题，存 `winnables.json`
-- **入口复用「记录未来可赢」输入框**：QuickAdd 切「未来可赢」记一条时，**不直接写当日赢记录**，而是调 `createWinnable` 挂成一个可赢目标（出现在上方卡片）。可赢目标卡片**没有自己的输入框**，靠 `refreshTick` 在 QuickAdd 记录后重新拉列表；空状态提示去下面输入框写
-- **程度由系统随机抽取（不再有固定星级）**：`createWinnable` 不再带 `win_level`（旧字段保留兼容但不再用于落地）。卡片左侧显示「🎲 随机」badge，不再显示固定星级
-- 每条展示：🎲 随机 badge + 连续赢天数（🔥 streak）+ 累计赢次数（🏆 total_wins）
-- **赢一次**：点一下 → `total_wins +1`，当天写入 `win_days`（同一天多点只计一次连续，但 total_wins 照常累加）→ **此时**才复制内容进**当日赢记录**，**程度每次随机抽取**（`_roll_level()`，每点一次重新随机，不固定）。后端 `win_winnable` 在响应里带 `last_roll_level` 告诉前端这次抽到什么，前端据此播 `playWinRecord(last_roll_level)` + 在该条目上闪一下「★★ 中赢」。赢 N 次点 N 次，当日记录就多 N 条（程度可能各不相同）。派发 `agent:dialogue-refresh`
-- **连续天数**：`win_days` 日期集合全量重算（`_recalc_streak`，类似常规任务），最近一次赢是今天或昨天才算「仍在连续」，否则归零；同时算历史最长 `best_streak`
-- **赢太多了**：点一下 → `archived=True` + `archived_date`，该项从页面消失，进入「历史」抽屉（展示累计次数 + 最长连续 + 归档日期）
-- 接口：`GET/POST /wins/winnables`、`POST /wins/winnables/{id}/win`、`POST /wins/winnables/{id}/archive`、`GET /wins/winnables/archived`、`DELETE /wins/winnables/{id}`
+## AI 搭子
 
-### 每日任务（已实现）
-- 任务直接在当日添加（**任务模板库已删除**，不再有「管理」入口 / `/tasks/manage` 路由 / `TasksManage.tsx`；后端 templates 接口保留未删但前端不再调用）
-- 快速添加：Enter 即保存，光标留在输入框
-- **历史最佳专注**：目标卡（StudyGoalCard 详细版）底部显示「🏆 历史最佳单日专注 Xh Ym · M月D日」，数据来自 `GET /tasks/best-records`
-- **主页今日获得 + 历史最佳**：StarWall 顶部「今日获得」= 完成任务得分 + 当天赢麻了星星；底部「🏆 历史最佳单日 N★ · M月D日」（best_stars 同口径，来自 `/tasks/best-records`）
-- 每条任务有：内容、预计时长(h)、重要程度(1-5 星)
-- 任务状态区分：完成（绿勾划线）/ 失败（红色划线，标注"X% · 失败·可重试"）/ 未开始
-- 失败/中断任务显示完成百分比，可直接点 ▶ 重试，成功任务不能再启动
-- **直接勾选完成**：不经过计时器直接打勾，写入 `source=manual` 的 task_run；`count_in_effective=true`（默认）时计入有效学习时间，`false` 时只在时间轴展示不计时，得分为 0；取消勾选则删除该记录
-- **不计入学习时间**：添加/编辑任务时可勾选「不计入学习时间」（`count_in_effective` 字段）；对应 task_run 同步写入该字段，时间轴标注「不计时」灰色小字，底部累计专注时间不包含此类记录
-- **保留任务（跨天不消失）**：添加/编辑任务时可勾选「保留任务」（`keep` 字段，sky 蓝主题，列表显示「保留」badge）。未必今天完成、以后某天再做的任务——不会随当天过去而刷新消失。`init_daily_tasks` 每次（今天首开）调 `_migrate_kept_tasks`：扫描所有早于今天的日期，把其中**未完成**（done/completed 之外）的保留任务从原日期移除、合并进今天列表（保留原 id / 进度 / run_status，paused 也带过来）。已完成的保留任务留在原日期不迁。计算/显示/计时与普通任务**完全一致**（它在今天列表里就是个普通 DailyTask）
-- **历史回溯**：Tasks 页顶部月历切换日期，历史日任务只读（不可编辑/添加/启动）
+目标：个性化、拟人化，不要模板回复。
 
-### 常规任务（已实现）
-- 独立于每日任务的习惯养成模块，紫色/violet 主题区分
-- 每条常规任务有：内容、预计时长、重要程度、目标天数
-- 打卡状态：今日已完成 / 未完成；`last_done_date` 存最近打卡日期
-- 连续打卡天数（`streak`）、历史最长连续、累计完成天数
-- **streak 计算**：从 log 全量重算（`_recalc_streak`），支持任意日期写入后结果一致
-- **连续失败警告**：创建日期后连续 N 天未打卡（`fail_days_limit`，用户可设）触发强制提示；创建当天不计入失败
-- 用户可设最大同时存在的常规任务数（`max_routines`，默认 3）
-- 常规任务按习惯维度统计，不按天统计（不出现在历史任务列表）
-- **漏打结算（统一进学习时长弹窗，不再独立弹窗）**：
-  - **未打卡即失败**：`_count_fail_days` 现在把「没打卡也没请假」的历史日**直接计入连续失败**（你人在、没点就是没坚持）。不再有「未结算暂不计」的中间态
-  - **放假/没开 app 整段桥接**：那种没开 app 的日子由**学习时长的整段裁定**带着一起处理——用户在 `GoalSettlement` 弹窗选「跳过」时，`_settle_routines_for_range(start, end, "skip", reason)` 把这段每个常规任务的未结算日写成 `excused`（请假桥接，streak 不断）；选「算中断」则写 `log[day]=False`（计失败，连续超 `fail_days_limit` 触发归档）
-  - `_recalc_streak` 中两次打卡之间若全是 excused 日则桥接连续
-  - 已删除独立的 `RoutineSettlement` 弹窗 + 逐天结算流程；`pending-settlement`/`settle` 接口保留未删但前端不再调用
-  - 接口：`GET /tasks/routines/pending-settlement`（返回各任务待结算日期）、`POST /tasks/routines/{id}/settle`（批量提交某任务的结算项）
+当前原则：
 
-### 任务追踪（已实现）
-- hover 任务 → ▶ 开始 → 3-2-1 倒计时（显示任务时长 + 总休息预算）→ 全屏追逐跑道
-- **计时基于时间戳算差值，不靠 requestAnimationFrame 累加**：已工作时长 = `performance.now() 流逝 − 暂停时长`，`setInterval(250ms)` 仅负责刷新显示。这样**窗口缩小 / 被别的程序盖住 / 切标签页都照常走表**（旧的 rAF 累加方案在后台标签页会被浏览器挂起，导致计时停住——已废弃）
-- **主计时器正计时**：从 0 开始算「已用时间」（`workedSecs`），不是倒计时；进度环 = `已用 / 预计`，封顶 100%
-- **到达预计时间不结束**：`workedSecs ≥ totalSecs` 时触发到点提示（橙色横幅 + `playGoalReached()` 音效，`reachedRef` 防重复），**继续计时**进入超时态（`overtime=true`），等用户自己点「完成任务」才结束
-- **超时态视觉**：主时间数字 / 已完成% / 进度环 / 中央状态文字均变琥珀色，副标题显示「超出预计 mm:ss」
-- **圆形跑道**：小人沿圆环奔跑，进度对应圆弧角度，帧动画切换 emoji；超时后小人停在终点（runnerPct 封顶 92）
-- **暂停 = 用户手动点，与窗口前后台无关**：只有手动点「暂停」才消耗休息预算（右下角 mm:ss，不足 60s 变红）。缩小页面去做学习任务**不算暂停、不扣预算、不判失败**——计时引擎不再把「页面不在前台」当成偷懒
-- **悬浮窗（Document Picture-in-Picture）**：计时页「⊡ 悬浮窗」按钮把计时器弹成 280×200 小窗，浮在所有程序之上、跟随屏幕；内含时间/进度/暂停/完成。仅 Chrome/Edge 支持（不支持时 alert 提示）。用 `createPortal` 把精简版计时 UI 渲染进 PiP 文档，并克隆主文档样式表保证 Tailwind 生效
-- **关窗恢复**：计时进行中实时把进度快照（`ActiveRunSnapshot`）写入 `localStorage`（key=`agent.activeRun`）。下次打开 Tasks 页检查未结束计时：**≤10 分钟**前离开 → 弹 `ResumeRunDialog` 问「是否继续」（继续=无缝续传，算中断=按 giveup 记录）；**>10 分钟** → 直接按中断保存。计时正常结束/中断/力竭时清除快照
-- **工作/休息可配置**：Tasks 页顶部计时器按钮打开设置，`work_mins` / `rest_mins` 存 config.json
-- 休息预算耗尽 → 失败（力竭）；完成按钮：未到预计时间点 = 提前完成（`early`，享加成），到点或超时点 = 正常完成（`complete`）；可随时「中断任务」
-- 结果页区分 4 种结局：🏆 完成 / ⚡ 提前完成 / 🚩 中断（显示完成%）/ 💀 力竭倒下
-- 无论成功/失败/中断，均保存执行记录到时间轴（`source=runner`）
-- 失败/中断任务在列表中划线显示，不消失，可重试
+- 聊天框输入就是普通聊天，不是任务事件。
+- 后台数据只是 AI 的记忆，只有自然相关时才提。
+- 业务触发反馈只描述当前事件，结合后台数据生成一句话。
+- AI 调用失败时显示 `AI 调用失败，请稍后再试。`，不再用假兜底句冒充 AI。
+- 不靠坏句黑名单解决模板味，优先从 prompt 输入结构处理。
 
-### 时间轴（已实现）
-- Dashboard 底部展示今日任务时间轴，竖排布局
-- 每条记录：左侧时间范围 + 任务名，右侧横向进度条（实线=工作，斜纹=暂停）
-- 成功/失败/中断记录均展示，失败显示完成百分比
-- **手动勾选记录**（`source=manual`）：进度条满格，任务名后标注「手动」小字；悬停时间区域显示铅笔图标，点击可修改开始时间（`HH:MM`），结束时间自动 = 开始 + actual_seconds
-- 底部累计：仅统计 `count_in_effective=true` 的完成任务工作时长（不含暂停/休息）
-- `actual_seconds=0` 的记录不显示在时间轴（如时长设为 0 的常规习惯任务）
-- 常规任务打卡（`source=routine`）也会出现在时间轴，任务名后标「常规」紫色小字
+关键实现：
 
-### 有效学习时间 & 爬坡目标（已实现）
-- **有效时间两种口径**（用户可切换，存 config.json）：
-  - 实际口径 `actual`：`actual_seconds`（不含暂停）
-  - 计划口径 `planned`：`min(actual_seconds, task_hours × 3600)`
-- **直接勾选完成的任务**：`actual_seconds = task_hours × 3600`，两种口径结果相同
-- **排除日（改为系统监测整段裁定，不再手动勾选）**：去掉了「今天不计入」按钮。模型很简单——只有两种结局：
-  - **昨天正常结算**（达标，或没达标但当天就算掉了）：第二天打开一切正常、无弹窗；若 X 天后才打开（X>1），中间 X-1 个空白天是一段，**一次弹窗**裁定整段
-  - **最后活跃日异常低**（含 0 / 没开 app）：那天没结算（hold），X 天后打开，从它到昨天是一整段，**一次弹窗**裁定
-  - 实现：`_settle_yesterday` 从上次结算日推进，**开头连续达标日**自动算掉；遇到**第一个未达标日（含 0）就停**，把 [该日 … 昨天] 留成整段。`_pending_gap` 返回这一整段 `{start, end, days, total_effective_secs, goal_secs}`
-  - 前端 `GoalSettlement` 弹窗（挂 `App.tsx`）：**一个弹窗、一次理由**，对整段一次决定——**跳过**（skip→整段每天写 `excluded_dates`，不计入目标升降）/ **算中断**（count→整段每天 `_settle_fail`，连续失败累加可触发降级）。没开 app 的日子天然在段内，不单独排除
-  - 接口：`GET /tasks/goal/pending-gap`（返回整段或 null）、`POST /tasks/goal/settle-gap`（{decision, reason}）
-- **爬坡目标**（`goal_state.json`）：
-  - 统一从 1h 起步；达标 → 次日 +step_mins；连续 fail_limit 天未达标 → -degrade_mins（不低于 min_goal_mins）
-  - `GET /tasks/goal` 每次调用自动结算昨日并更新状态
-  - 展示：连续达标天数（🔥）、距目标差距、连续未达标预警
-  - 用户可配置：step_mins / fail_limit / degrade_mins / min_goal_mins / goal_mins（直接修改当前目标）
-- **StudyGoalCard**：compact 版在 Dashboard，详细版在 Tasks 页顶部
+- `SUPERVISOR_SYSTEM` 在 `backend/routers/ai.py`。
+- `_history_messages()` 注入完整业务摘要。
+- 最近聊天只作为上下文说明注入，不把旧 assistant 回复当作风格样本。
+- 业务触发反馈调用 `_generate(..., include_dialogue=False)`，避免历史回复污染新回复。
+- `_data_steer()` 低概率提醒 AI 参考数据事实，不要求硬报数字。
+- `supervisor_stats.py` 输出 `type/scope/metric/unit/meaning` 形式的事实卡，减少 AI 混淆指标。
 
-### 每日提醒（已实现）
-- 托盘程序后台每 30 秒检查提醒时间
-- Windows Toast 通知，点击直接打开应用
-- 在赢麻了页面「提醒」按钮中设置，支持多个时间点
+触发器：
 
-### 音效系统（已实现）
-所有音效通过 `frontend/src/lib/sounds.ts` 的 Web Audio API 合成，无需外部音频文件。
+- `win_created`：记录赢麻了后必回。
+- `task_completed`：任务完成后必回。
+- `task_aborted`：中断/失败按概率和冷却。
+- `task_created`：新增任务后必回。
+- `task_deleted`：删除任务低概率反馈。
+- `idle`：后台随机主动冒泡。
 
-| 函数 | 触发时机 |
-|------|---------|
-| `playSlotTick()` | 老虎机滚动，每经过一格（减速后停止触发） |
-| `playReelStop(i)` | 第 i 个滚轮停止，D/F#/A 三和弦依次响起 |
-| `playSlotComplete(m)` | 三轮全停后上行琶音，倍数越高音越高亢 |
-| `playWinRecord(level)` | 记录赢麻了成功，星级越高音符越多越响亮 |
-| `playBountyAppear()` | 赏金任务首次弹出，低→高神秘感三音 + 铃声余韵 |
-| `playGoalReached()` | 任务正计时达到预计时间，柔和上行三音（提醒可收尾，不打扰） |
-| `playClick()` | 通用按钮点击轻音 |
+新增业务反馈时，在 `TRIGGERS` 加 scene，然后在业务代码里调用 `supervisor_react(...)` 或 `emit_task_event(...)`。
 
-**注意**：Web Audio API 需要用户交互后才能播放（浏览器限制），已在 `getCtx()` 中处理 suspended 状态。
+## 聊天工具调用
 
-### 奖励点数系统（已实现）
+聊天里可以让 AI 操作 agent，例如派发任务。
 
-#### 得分计算（`_calc_score` in `routers/tasks.py`）
-失败 / 中断任务得分为 0，成功任务按以下公式计算：
+- `backend/ai_tools.py`：工具注册表。
+- `routers/ai.py::_chat_react()`：聊天处理入口。
+- `ai_client.chat_with_tools()`：OpenAI-compatible function calling。
 
-```
-基础分 = stars × ceil(有效时长 / 0.5h)
+注意：deepseek-v4-pro 这类 thinking model 对强制 tool_choice 不稳定，所以保留 JSON 提取路径。新增工具优先在 `ai_tools.py` 里加 handler、schema、intent keywords，不要把分发逻辑写散。
 
-有效时长（与有效时间口径对齐）：
-  实际口径：actual_seconds / 3600
-  计划口径：min(actual_seconds, task_hours × 3600) / 3600
+## Buff
 
-加成系数（所有满足条件的系数相乘）：
-  零暂停       pause_count == 0              × 1.3
-  少暂停       0 < pause_count ≤ 计划段数-1  × 1.1  （计划段数=ceil(task_hours/0.5)）
-  省休息       rest_remaining_secs > 0       × 1.2
-  提前完成     end_reason == "early"          × 1.1
-  每日倍数     当日 multiplier（1.0-3.0）     × multiplier
+buff 已抽成可扩展结构，但只有能真实兑现的 buff 才能进随机池。
 
-最终得分 = round(基础分 × 所有加成系数)
+当前已兑现：
+
+- `score_bonus`：完成任务后的额外奖励分。
+- `lucky_dice`：今天完成任务获得，第二天老虎机结算时让每个骰子在正常结果基础上 +1，上限 5。
+
+关键规则：
+
+- 赏金任务 buff 100% 给。
+- 常规/普通类任务可以概率触发 buff。
+- 未实现兑现逻辑的 buff 不应进入随机池。
+- 新 buff 必须先实现参数和结算接口，再加入随机池。
+
+关键文件：
+
+- `backend/storage/buffs.py`：模板和随机池。
+- `backend/storage/buff_effects.py`：实际兑现。
+- `backend/storage/buff_rewards.py`：获得记录。
+
+## 幸运骰子结算
+
+当前设计：老虎机先正常摇出三个骰子，再在结算阶段叠加 buff。
+
+后端：
+
+- `GET /bonus/pending-dice-buffs`：返回今天待生效的骰子 buff。
+- `POST /bonus/today`：保存每日结果时消费 lucky dice，并返回最终 rolls/multiplier/buff 明细。
+
+前端：
+
+- `App.tsx` 在没有今日 bonus 时先拉 pending dice buffs，再打开老虎机。
+- `SlotMachine.tsx` 正常播放一次动画，不播放叠加动画。
+- 结果区展示正常结果和 buff 叠加后的最终结果。
+
+## 任务和得分
+
+- 每日任务、保留任务、赏金任务、常规任务都走统一任务事件反馈。
+- 完成任务会写 `task_run`，并根据实际规则计算分数。
+- 常规任务是长期挂在页面的习惯任务，完成后才可能揭露 buff。
+- 赏金任务天然带 buff，并且 buff 在接受/完成流程里展示和兑现。
+
+## 开发约定
+
+- 不要把 `backend/data/` 的用户数据提交。
+- 不要把 AI 历史回复当作 prompt 风格样本反复喂回去。
+- 需要精确数字时让 Python 算，AI 只负责表达。
+- AI prompt 不要靠不断补丁式禁止事项堆砌，优先规范输入数据结构。
+- 新 buff 必须先实现兑现逻辑，再加入随机池。
+- UI 改动优先沿用现有组件和布局，不做大面积重设计。
+
+改完后至少跑：
+
+```bash
+python -c "import sys; sys.path.insert(0,'backend'); import routers.ai; print('ai import ok')"
+python -c "import ast, pathlib; ast.parse(pathlib.Path('backend/routers/ai.py').read_text(encoding='utf-8')); print('ai ast ok')"
+cd frontend
+npm run build
 ```
 
-注意：零暂停和少暂停互斥（zero_pause 触发则 few_pause 不触发）；暂停次数阈值始终按**计划段数**算，不随提前完成缩水。手动勾选完成的任务（`source=manual`）不走 `_calc_score`，得分简化为：`round(stars × ceil(有效时长/0.5h) × multiplier)`，不叠加暂停/休息/提前完成加成。
-
-#### Buff 系统（已实现：固定模板 + 可兑现随机池）
-
-Buff 定义在 `storage/buffs.py`，模板可以多于当前可抽取池；只有已接入真实结算的类型会进入 `ACTIVE_BUFF_TYPES` / `ACTIVE_BUFF_TEMPLATES`，因此用户不会抽到“只能展示、不能兑现”的 buff。当前可抽取池：
-
-| Buff | emoji | 类型 | 触发/兑现 | 系数范围 |
-|------|-------|------|-----------|----------|
-| 专注冲刺 | 🎯 | `task_score` | 本次任务零暂停时，直接加乘该 run 的 `score` | ×1.3~2.0 |
-| 闪电完成 | ⚡ | `task_score` | 本次任务提前完成时，直接加乘该 run 的 `score` | ×1.3~2.0 |
-| 今日燃烧 | 🔥 | `daily_score` | 当天所有成功任务 `score` 均加乘；获得前已完成和之后完成的 run 都会补上 | ×1.1~1.5 |
-| 幸运加注 | 🎰 | `lucky_dice` | 次日保存每日抽奖时三颗骰子各 +1，上限 5，后端重算 multiplier | 无系数 |
-
-仍保留但**不进入随机池**的模板：
-
-| Buff | 类型 | 状态 |
-|------|------|------|
-| 免死金牌 | `goal_shield` | 暂未接入目标结算，隐藏 |
-| 加速成长 | `routine_double` | 暂未接入常规任务 total_done 结算，隐藏 |
-
-效果执行在 `storage/buff_effects.py`：
-- `apply_reward_effect(reward)` 是统一入口，按 `buff.type` 分发到执行器；新增可兑现 buff 时只扩 handler，不要在各完成入口散写逻辑
-- 分数类 buff 直接更新 `task_runs.json` 中对应 run 的 `score`，并在 run 上追加 `buff_effects[{reward_id, buff_id, score_before, score_after, applied_at}]` 防重复
-- `daily_score` 可重复调用且幂等：获得时会补今天已有 run，之后每次成功保存 run 后也会调用 `apply_active_daily_score_rewards(date)` 给新 run 补当天已获得的日级 buff
-- `lucky_dice` 不改当天数据；第二天 `POST /bonus/today` 调 `consume_lucky_dice_bonus()` 消费昨日未消费的幸运加注，写入 `dice_consumed_date`，返回 `dice_bonus`
-
-奖励记录在 `storage/buff_rewards.py` / `data/buff_rewards.json`：
-- 记录字段：`date/task_id/task_content/task_type/buff/revealed/created_at/revealed_at/applied/applied_at/applied_runs`
-- `revealed` 只控制弹窗是否已揭露；`applied` 控制效果是否已执行。分数类 buff 可以在弹窗确认前先兑现，避免分数展示和实际结算不同步
-- 同一天、同任务、同任务类型、同 buff id 会防重复创建，避免前端重复调用完成接口造成重复发放
-
-#### 赏金任务 Buff（已实现）
-- **AI 派发（搭子接管赏金）**：有 AI key 时，`_ai_select_bounties` 不再机械筛选任务名，而是把**完整画像**喂给 AI——`supervisor_context.build_summary()`（赢麻了/专注时长/习惯）+ `_task_profiles()`（每个任务做过几次、成功几次、最近一次什么时候）。AI 以「懂你的搭子为你着想」口吻挑出/设计此刻对你有意义的任务，并给一句**派发理由**（`reason`，≤30字，搭子口吻），展示在赏金卡片上。返回 `[{content, hours, stars, reason}]`，最多保留 2 条**有效**任务（脏数据不占名额）。无 AI key 降级为从历史去重随机抽取（`reason` 为空）
-- 内容从全历史 `task_runs` 去重随机抽取（降级模式，不限今日）
-- 每日生成 0-2 个，每条随机分配一个 buff + 随机弹出时间（游戏日 08:00 内随机）
-- 前端每 60 秒轮询 `GET /bounty/daily/pending`，**首次出现**的新赏金自动弹窗 + 音效
-- 已弹过的赏金 id 记录在 `shownBountyIds` ref（会话级），不重复弹
-- 状态流转：`pending → accepted → done` 或 `pending → expired`
-- 完成赏金任务**必然**获得对应 buff，并通过 `apply_reward_effect()` 立即兑现；`completeBounty()` 只负责标记 done，发放发生在 `/tasks/run` 成功保存后，避免重复发放
-- **赏金 = 日常任务的升级版（执行层完全复用，无并行逻辑）**：接受后的赏金卡片加「▶ 开始计时 / ✓ 标记完成」按钮，和日常任务用**同一套** `TaskRunner`、同一套 run 落地（`source="bounty"`）、同一套 `_calc_score` 得分、同样进时间轴和有效时间统计。`TaskRunner` 加了 `source` + `onFinished(success)` props：计时成功完成后回调 `completeBounty()` 标记 done。直接勾选完成则写一条 `source=bounty` 的 run + `completeBounty()`。赏金区视觉仍独立（金色卡片 + buff），只是获得了执行能力
-- **中断/续传也一致**：赏金中断（giveup）后 bounty 保持 `accepted`（onFinished 仅 success 才 completeBounty），run 记 `success=False`。`handleBountyStart` 从最后一条未成功 run 的 `actual_seconds` 续传（和日常任务 `run_status==='paused'` 同一口径），卡片显示「X% · 已暂停 · 点击继续」、按钮变「继续计时」。关窗恢复也保留归属：`ActiveRunSnapshot.source` 持久化，重开后续传/中断都按 `source` 正确落地与标记。**改 TaskRunner，日常与赏金同步生效**
-
-- 普通/保留/常规任务完成后 **20% 概率**从已实现随机池抽取一个 buff；完成前不知道，完成后由 `BuffRewardPopup` 揭露
-- `AppLayout` 全局挂载 `BuffRewardPopup`，监听 `agent:buff-reward-refresh` 并轮询 `/tasks/buff-rewards/pending`；用户确认后 `PATCH /tasks/buff-rewards/{id}/revealed`
-- 赏金任务自带 buff 为 100% 发放；普通/保留/常规任务为概率发放
-
-### 待开发
-- [ ] 接入剩余 buff 效果后再开放随机池（`goal_shield` / `routine_double`）
-- [ ] 积分展示页面（历史得分、buff 收集记录）
-- [ ] 学习计划页面
-- [ ] AI 趋势分析（Anthropic SDK）
-- [ ] 历史回顾页面
-- [ ] Electron 打包（功能稳定后）
-
----
-
-## 架构设计
-
-### 数据流
-```
-用户操作（前端）
-    ↓ fetch /api/*
-Vite 代理 → FastAPI（:8000）
-    ↓
-routers/*.py（业务逻辑）
-    ↓
-storage/*.py（JSON 读写）
-    ↓
-backend/data/*.json
-```
-
-### 关键设计决策
-- **storage 层隔离**：routers 不直接操作文件，必须通过 storage/ 层
-- **游戏日边界**：`bonus.py` 中 `_current_game_date()` 统一处理 08:00 边界
-- **老虎机容错**：后端无响应时不弹老虎机；`today()` 返回 null（今天未抽）才弹
-- **任务执行记录**：`started_at` 在倒计时结束（phase='running'）时记录，非点击时；手动勾选时 `started_at = now - task_hours×3600`
-- **task_run source 字段**：`runner`=TaskRunner 产生，`manual`=直接勾选产生，`routine`=常规任务打卡产生，`bounty`=赏金任务产生；manual 记录可在时间轴编辑开始时间，runner/routine/bounty 记录不可编辑
-- **task_run count_in_effective 字段**：从任务的 `count_in_effective` 字段继承写入；`_calc_effective_secs()` 跳过该字段为 `false` 的记录；时间轴 `actual_seconds=0` 的记录不展示
-- **勾选完成同步写 run**：`PATCH /daily/{id}/done` 勾选时始终写入 manual run（无论是否计时），取消时删除对应 manual run；同一任务只保留一条 manual run（防重复）
-- **常规任务时间轴**：`source=routine` 的记录现在出现在时间轴；`hours=0` 的常规任务不写 task_run（不在时间轴显示）
-- **任务状态**：`run_status` 字段存在 daily_tasks，区分 none/running_failed/completed；失败不删任务，可重试
-- **任务结束统一入口**：所有结束路径（完成/提前/中断/失败）均通过 `finishRun(s, reason)` 处理
-- **计时用时间戳算差值**：`computeWorked()` = `initProgress + (performance.now() − startMono)/1000 − pausedTotal − 本次暂停时长`；用 `performance.now()`（单调时钟）而非 `Date.now()`，避免系统改时间跳变。`setInterval(250ms)` 只刷新显示，不参与计时——所以窗口缩小/后台都准。**不再有 rAF 累加、不再有自动休息段（auto-rest）、不再有工作段循环（workSecsLeft）**
-- **暂停统计分两份**：`pausedTotalRef`=本会话新增暂停秒（续传时从 0 起，因为 `initProgress` 已扣除续传前暂停，避免双重扣减）；`historicalPausedRef`=续传前累计暂停秒（仅用于显示总暂停时长）。两者相加才是展示用的 `pausedSecs`
-- **PiP 悬浮窗**：`documentPictureInPicture.requestWindow()` 开小窗，`createPortal` 把精简计时 UI 渲染进 `pipWindow.document.body`，并克隆主文档 `<style>/<link rel=stylesheet>` 到 PiP head 保证 Tailwind 生效；不支持时 alert 提示，组件卸载时关闭 PiP
-- **关窗恢复（10 分钟规则）**：`persist()` 每 tick 把 `ActiveRunSnapshot` 写 localStorage（含 `workedSecs/restSecsLeft/pausedTotal/startedAtISO/savedAtISO`），`finishRun` 清除。Tasks 页挂载 effect 读快照：`Date.now() − savedAtISO ≤ 10min` → 弹 `ResumeRunDialog`（继续=把 `workedSecs/restSecsLeft/pausedTotal` 作为 resume props 传回 TaskRunner 无缝续传；中断=按 giveup 存 run）；超时 → 直接按 giveup 存 run（`actual_seconds=snap.workedSecs`）。saveRun 的 `actual_seconds` 存**总**已工作秒数（含续传进度），便于中断后续传
-- **爬坡目标结算**：`_settle_yesterday()` 在每次 `GET /tasks/goal` 时调用，检查昨日是否达标并更新状态
-- **历史任务只读**：Tasks 页切换到非今日日期时，所有编辑/添加/启动操作隐藏，`readOnly` prop 传入 TaskRow
-- **常规任务不按天统计**：routines 有自己的 log/streak，不出现在 daily_tasks 历史中
-- **常规任务 streak 重算**：`_recalc_streak()` 从 log 全量重算，保证结算等任意日期写入后结果一致，不依赖增量逻辑；请假日（excused）视为桥接
-- **常规任务 force_warning**：从 `created_date` 起算，创建前的日期不计入连续失败；避免新建当天就触发警告
-- **漏打结算（未打卡=失败，放假整段桥接）**：常规任务某历史日：`log[day] is True`（打卡）、`day in excused`（请假，桥接不计失败）→ 其余一律计失败（含 `log=False` 和「没打卡没请假」）。放假/没开 app 不会被误判：学习时长弹窗选「跳过」时 `_settle_routines_for_range` 把整段写成 excused 桥接
-- **赏金弹窗去重**：`shownBountyIds` ref 记录会话内已弹过的 id，只有新 id 才触发自动弹窗和音效
-- **音效初始化**：`AudioContext` 懒创建，首次调用 `getCtx()` 时实例化，suspended 状态自动 resume
-- **中断任务为暂停态**：`end_reason=giveup` 对应 `run_status=paused`，不是失败；下次启动时取出最后一条 actual_seconds 作为 `initialWorkedSecs` 传入 TaskRunner，从已有进度继续
-- **游戏日边界统一**：后端所有日期判断用 `_game_today()`（在 `routers/tasks.py` 中定义），以零点为日期分界，与自然日对齐
-
----
-
-## AI 集成
-
-> 以下内容面向开发者，不面向用户。
-
-### 架构
-
-- **`backend/ai_client.py`**：零第三方依赖，用 Python 内置 `urllib.request` 发 HTTP 请求
-- 支持两种协议：
-  - `anthropic`：用 Anthropic Messages API（`/v1/messages`，`x-api-key` + `anthropic-version` 头）
-  - `openai`：用 OpenAI Chat Completions 格式（`/chat/completions`，`Authorization: Bearer` 头）；所有 OpenAI 兼容 provider 均走此协议
-- **`PROVIDERS`** dict 定义所有支持的 provider，每条包含 `label / hint_model / hint_key / protocol / base_url`
-
-### 配置存储（`config.json`）
-
-```
-ai_provider        选用的 provider id（空=未启用）
-ai_api_key         API Key（明文存本地，不上传 git）
-ai_model           用户自填模型名（空则用 PROVIDERS 里的 hint_model）
-ai_custom_base_url 仅 openai_compat 模式需要，其他 provider 忽略
-```
-
-### 可用性检查与降级模式
-
-```python
-ai_client.is_available()  # → bool：provider + key 都填了才返回 True
-ai_client.chat(prompt)    # → str | None：不可用或出错时返回 None
-ai_client.chat_json(prompt)  # → Any | None：自动提取 ```json ... ``` 或裸 JSON
-```
-
-调用方必须处理 `None`，降级到内置规则。**不允许因 AI 不可用而抛异常或拒绝用户操作**。
-
-### 当前 AI 功能
-
-| 函数 | 位置 | 作用 | 降级行为 |
-|------|------|------|----------|
-| `_ai_select_bounties(history, today)` | `routers/tasks.py` | 喂完整画像（build_summary + 任务频次画像），让搭子为你派 0-2 个有意义的任务 + 派发理由 | 返回 None → 随机抽取历史记录 |
-
-### 新增 AI 功能模式
-
-1. 在业务函数中调用 `ai_client.chat()` 或 `chat_json()`
-2. 收到 `None` 时回退到规则逻辑，保证功能始终可用
-3. 接口响应中可附加 `ai_generated: bool` 字段让前端决定是否展示标记
-
-### 添加新 Provider
-
-在 `ai_client.PROVIDERS` 中新增一条 dict，指定 `protocol`（`"anthropic"` 或 `"openai"`）和 `base_url`，前端设置页下拉列表会自动显示。
-
----
-
-## 代码风格规范
-
-- 注释语言：中文
-- 函数命名：`snake_case`（Python）/ `camelCase`（TypeScript）
-- 组件命名：`PascalCase`
-- 异步：Python 同步优先；前端 async/await
-- 类型注解：必须（Python 所有函数参数和返回值；TS 所有 props 和 API 类型）
-- 数据读写：routers 层不直接操作文件，必须通过 `storage/` 层
-- UI 风格：Neo-minimalism，暖米白底色，大圆角卡片，muted 配色
-
----
-
-## 开发规范
-
-### 新增功能流程
-1. 先在此文档「核心概念」和「游戏化机制」中定义命名和规则
-2. 后端：在 `storage/` 新增读写函数 → 在 `routers/` 新增接口 → 在 `main.py` 注册
-3. 前端：在 `api.ts` 新增类型和请求函数 → 实现页面/组件 → 在 `App.tsx` 注册路由
-
-### 禁止事项
-- 禁止 routers 层直接操作 JSON 文件（必须走 storage 层）
-- 禁止跳过 TypeScript 类型注解
-- 禁止在组件内直接 fetch，必须通过 `api.ts` 封装
-- 禁止硬编码日期逻辑，统一使用 `_current_game_date()`
-
----
-
-## 当前开发阶段
-
-**当前阶段**：核心功能完善中
-
-**已完成**：
-- [x] FastAPI 后端 + React 前端脚手架
-- [x] 响应式布局（桌面侧边栏 + 手机底部导航）
-- [x] 每日抽奖老虎机（滚轮动画 + 倍数计算 + 08:00 游戏日边界 + 后端容错 + 音效）
-- [x] 赢麻了模块（月历 + 记录 + 快速添加 + 删除 + 分析抽屉 + 音效）
-- [x] 未来可赢等级（0星/靛蓝配色，不计入星数，月历单独显示 ◇，分析抽屉单独列）
-- [x] 每日任务模块（模板库 + 当日任务 + 赏金任务 + 管理页）
-- [x] 直接勾选完成计入学习时间（写 manual task_run，取消时删除；支持「不计入学习时间」选项）
-- [x] 任务追踪器（3-2-1 倒计时 + 圆形追逐跑道 + 暂停/失败/提前完成/中断 + 结果页）
-- [x] 计时改时间戳驱动（窗口缩小/后台照常走表，废弃 rAF 累加）+ 暂停只由用户手动控制、与窗口前后台解耦
-- [x] PiP 悬浮窗（Chrome/Edge，计时器挂屏幕角落，边学习边看）
-- [x] 关窗恢复（localStorage 快照，≤10 分钟弹窗续传，超时按中断记录）
-- [x] 任务状态持久化（run_status：完成/失败/重试，时间轴均记录）
-- [x] 每日时间轴（竖排展示，手动完成记录可编辑开始时间，区分 runner/manual/routine 来源；常规任务标「常规」紫色；不计时任务标「不计时」灰色；hours=0 不显示）
-- [x] 每日提醒（托盘 + winotify Toast 通知）
-- [x] 托盘启动器（app.py + 启动.vbs，无黑窗口）
-- [x] GitHub 仓库（https://github.com/JiaheShrimp/study_agent）
-- [x] 工作/休息时长可配置（Tasks 页计时器按钮，TaskRunner 接收 workMins/restMins props）
-- [x] 常规任务（紫色主题，连续打卡/目标天数/失败警告/数量上限）
-- [x] 常规任务漏打结算（未打卡即失败；放假/没开 app 的整段跟随学习时长弹窗一次裁定为请假桥接 / 中断计失败）
-- [x] 常规任务 force_warning 修复（从创建日起算，创建当天不触发警告）
-- [x] 常规任务 streak 重算（从 log 全量重算，保证补卡后一致性）
-- [x] 历史任务回溯（Tasks 页月历切换日期，历史只读）
-- [x] 有效学习时间统计（实际/计划两种口径，排除日 + 理由记录）
-- [x] 爬坡学习目标（goal_state.json，达标递增/连续失败降级/连续天数统计）
-- [x] Dashboard 精简（移除统计行和赢麻了速览，保留问候/倍数/目标卡/功能入口/时间轴）
-- [x] 奖励点数系统（stars × 有效段数 × 多重加成系数 + 每日倍数，结果页展示得分明细）
-- [x] Buff 系统（模板库 + 已实现随机池 + 奖励记录 + 效果执行器；task_score / daily_score / lucky_dice 已兑现，未实现类型隐藏）
-- [x] 赏金任务重设计（内容从全历史 task_runs 随机抽取，每条携带 buff，随机弹出时间，0-2条/天）
-- [x] 赏金任务弹窗优化（首次出现自动弹 + 音效，会话内不重复弹，弹窗尺寸放大）
-- [x] 音效系统（Web Audio API 合成，老虎机/赢麻了/赏金弹出/按钮点击）
-- [x] 时间轴显示暂停次数（`暂停 Xs · N次`）
-- [x] 任务列表失败/中断显示完成百分比（`X% · 失败 · 可重试`）
-- [x] AI 自主监管者基础设施（supervisor 统一入口 + 消息队列 + 右下角气泡轮询，目前仅接入赢麻了）
-- [x] 可赢目标（赢麻了页面挂「未来可赢」带星级，赢一次累计连续/次数 + 按星级写当日记录，赢太多了归档进历史，winnables.json）
-- [x] 保留任务（每日任务可勾「保留任务」跨天不消失，init 时迁移过往未完成的保留任务到今天，计算/显示/计时与普通任务一致）
-- [x] 搭子聊天栏按天清零（GET /dialogue 只返回今天，全量历史保留后台；记忆 = 今天 16 条 + 更早随机抽样 6 条；业务数据全量喂 AI）
-- [x] AI 派发赏金更人性化（喂完整画像 + 任务频次，搭子口吻派任务 + 派发理由 reason）
-- [x] AI 接管 agent 操控权（工具注册表 ai_tools.py + 原生 function calling 传输层 + 统一识别分发；加新指令只写 handler + @register_tool，识别/分发零改动；第一期工具 assign_task）
-
-**待开发**：
-- [ ] 接入剩余 buff 效果后再开放随机池（goal_shield / routine_double）
-- [ ] Buff 历史/收集展示页面（buff_rewards 记录、触发来源、兑现结果）
-- [ ] 积分展示页面（历史得分、buff 收集记录）
-- [ ] 学习计划页面
-- [ ] AI 趋势分析（Anthropic SDK）
-- [ ] 历史回顾页面
-- [ ] Electron 打包（功能稳定后）
-
-### AI 自主成长伙伴「搭子」（全局聊天栏 + 对话记忆，目前仅接入赢麻了）
-
-一个像**朋友/搭子**一样的 AI 角色（**不是监工、不说教、不喊口号**），以**全局唯一的聊天栏**呈现。两种来往：
-- **业务操作触发**：你在赢麻了等页面操作，搭子异步生成主动反馈，出现在聊天栏。
-- **主动聊天**：你在聊天栏打字，搭子带历史回复。
-
-**核心：对话记忆**。两条路径共用同一条「对话历史」（`storage/ai_dialogue`，**全量跨天保留在后台文件**），它既是搭子的记忆，也是聊天栏内容的来源——每次生成都把对话（**含搭子自己说过的话**）拼进 prompt，所以它有连续感、且不会重复（看得见自己说过啥）。这和「桌面宠物每次单轮失忆」是本质区别。
-
-**聊天栏按天清零（显示 ≠ 记忆）**：
-- **显示**：`GET /ai/dialogue` 只返回**今天（游戏日，零点为界）**的对话（`ai_dialogue.today_turns()`）。每天打开聊天栏是干净的，过去的对话不呈现给用户——但**全部历史仍保留在 `ai_dialogue.json`**，只是不展示。
-- **记忆**：搭子生成回复时拼的是 `ai_dialogue.memory_turns(today_limit=16, past_sample=6)`＝**今天最近 16 条 + 更早历史里随机抽样 6 条**。今天的保证连续感/防今日内重复；旧对话当学习语料让回复更人性化，是否提及过去交给随机、不强求。
-- `recent_turns()` 保留作兼容旧调用；新逻辑走 `memory_turns()`。
-
-#### 一次生成发给 AI 的 messages（`_history_messages`）
-
-时间升序：
-1. `user`：全部业务数据快照（`supervisor_context.build_summary()`，本地读零成本）+ `assistant` 一句确认（"我都看着呢"）
-2. 记忆对话（`memory_turns`：今天最近 16 条 + 更早随机抽样 6 条，user/assistant 交替，搭子的历史回复也在内）
-3. `user`：本次新输入 / 场景描述（`extra_user`）
-
-#### 业务数据聚合（`supervisor_context.build_summary()`）
-
-- 赢麻了：**最近 RECENT_KEEP=10 条固定 + 其余随机抽样**凑到 SAMPLE_BUDGET=40 条（每次抽样不同 → 逼 AI 均匀覆盖历史、减少老薅那几条的重复）；≤40 条时全给
-- 专注：累计小时 + 每日趋势；常规习惯：当前/历史最长 streak + 累计打卡 + 今日状态
-- **可量化数据洞察（`supervisor_stats.py`）**：build_summary 末尾附一段「已替你算好的确切数字」，由 Python 统计、不靠 AI 算。包括：单日专注历史纪录是哪天/多少分钟/距今几天、今天已专注多少、距破纪录还差多少、近 7 天日均 vs 上一周（上扬/回落）、连续专注天数、赢麻了总条数/今日条数/记赢最多的一天/多久没记了、习惯接近或追平历史最长。**数据不足的洞察直接不产出，不硬凑**。AI 拿现成结论 → 措辞交给它，计算交给 Python
-
-#### 「偶尔报数据」= 随机引导（`_data_steer()`）
-
-搭子不该每条都念统计（像播报员），也不该从不结合数据。靠 `_history_messages` 里的 `_data_steer()` 随机落地：每次生成时掷骰子——**≈35% 命中**则在本次输入后追加强引导（「这次结合数据洞察抛一个具体数字，正面打气或调侃都行，只说一句」，4 种不同口吻随机选避免套路）；**≈35%** 明确叫它「这次别报数据、就闲聊」；**≈30%** 不加引导自由发挥。这样「偶尔」是**可控的概率**而非靠模型自觉，且每次措辞不同。系统人设里也说明了「偶尔可结合数据抛具体数字，正面/调侃皆可，但别每条都报、别像播报员，措辞每次要新」
-
-#### 防重复 = 读自己回复 + 随机抽样
-
-- **读自己回复**：对话历史里有搭子说过的话，它不会再说一遍（"已经夸过论文框架了，换个说"）
-- **随机抽样**：每次喂的"老记录"不同，覆盖更均匀
-
-#### 统一触发器注册表（TRIGGERS）& 接入新触发点
-
-搭子对 agent 各种操作的反馈收拢成**一个注册表** `TRIGGERS: dict[str, Trigger]`（`routers/ai.py`）。每个 `Trigger` = `prob`（命中概率）+ `cooldown`（全局冷却秒数）+ `scene`（场景构造器）+ `fallback`（兜底文案池）。
-
-`supervisor_react(trigger, context, *, force=False)` 是唯一业务入口，判定顺序：
-1. **全局冷却**：`ai_dialogue.seconds_since_last_assistant()` 距搭子上次发言 < `cooldown` 则跳过（避免连续操作刷屏；`win_created`/`idle` cooldown=0）
-2. **命中概率** `prob`
-3. 通过 → 后台 daemon 线程异步生成（`scene` 描述「这次发生了什么」+ `_history_messages` 统一注入业务数据/对话历史）→ 写入对话历史。不阻塞主请求、出错静默
-
-**已注册触发点**：`win_created`(1.0/无冷却) · `task_done`/`completed`(完成必反馈，由 `emit_task_event` 统一入口触发) · `task_failed`/`interrupted`(中断/力竭，按概率和冷却) · `task_start`(0.25/30min，暂无后端 hook 未启用) · `idle`(主动说话)
-
-**接入新触发点（只需两步，分发/冷却零改动）**：
-1. 在 `TRIGGERS` 加一条 `Trigger`（概率/冷却/`_scene_xxx` 构造器/兜底）
-2. 在对应 router 业务函数里调 `supervisor_react("xxx", {...context})`
-
-**主动说话（idle）**：`start_idle_speaker()` 后台线程（`main.py` startup 启动），每 30~90min 随机醒来，若距最近对话 ≥25min（没在操作/聊天）且概率命中，就 `force` 触发 `idle` 让搭子结合数据随口冒泡。三重「不吵」：随机间隔 + 安静门槛 + 概率。
-
-#### 角色人设
-
-`SUPERVISOR_SYSTEM`：一个真正了解你这个人的**朋友/搭子**，真诚俏皮、为你高兴、偶尔损你；**明令禁止『加油』『好好学习』『快去写作业』这类说教/命令话**。每条限一句、≤40 字。`_generate` 用 `max_tokens=800`，AI 超时**自动重试一次**降低撞兜底概率。
-
-> **max_tokens 为何是 800（重要）**：部分模型是「推理模型」（如 `deepseek-v4-pro`、o1 系列），返回里 `content`（正式回复）之外还有 `reasoning_content`（内部思考），两者共享 `max_tokens`。若上限太小（曾用 200），token 全被思考吃光、`content` 返回空字符串且 `finish_reason=length`，调用方误判失败 → 触发重试 → 白等一倍时间还常落到兜底。给足 800 后推理模型能正常出回复；普通模型用不满，无额外成本。注：耗时主要在模型本身（推理模型先思考，单次约 6~9 秒），数据聚合+prompt 构建仅约 12ms，不是瓶颈。
-
-#### 接口
-
-| 方法 | 路径 | 作用 |
-|------|------|------|
-| GET | `/ai/dialogue?limit=N` | 聊天栏拉取对话历史 |
-| POST | `/ai/chat` | 用户发消息：存 → 带历史生成回复 → 存 → 返回 |
-
-业务触发的反馈无独立接口，直接写入对话历史，前端聊天栏轮询 `/ai/dialogue` 捕获。
-
-#### 前端（聊天栏）
-
-- `components/ChatSidebar.tsx`：全局唯一，挂在 `AppLayout` **左侧常驻**（导航栏之后、主内容之前；手机端为可收起浮层）。做成独立浮卡（四周 `p-3` 留白 + 圆角边框，与导航栏视觉分隔）。消息列表（user 右/assistant 左气泡）+ 输入框（Enter 发送、Shift+Enter 换行）+ 乐观插入用户消息。
-- 布局高度锁定一屏（`AppLayout` 用 `h-screen` + `overflow-hidden`），聊天栏内部消息区滚动，不被长页面撑长。
-- 每 **5s** 轮询 `/ai/dialogue`；另监听 `agent:dialogue-refresh` 全局事件（记赢麻了等操作派发），命中后在 1.5/3.5/6s 连刷几次，覆盖后台生成的几秒，无需干等下一轮。
-- 检测到新 assistant 消息（对比最后 id）播 `playChatMessage()` 提示音（首次加载不播）。
-- **「正在思考」动画**：发消息 / 收到 `agent:dialogue-refresh` 时显示三点跳动气泡（CSS `animate-typing-dot`，在 `index.css`），新反馈到达时收尾；30s 超时兜底自动关，防止反馈不来时一直转。
-
-#### 聊天里的工具调用：搭子接管 agent 操控权（统一地基，已实现）
-
-> **核心理念**：这不是「派任务」这一个孤立功能，而是「**AI 接管 agent 操控权**」的统一能力。所有「让 AI 帮我操控 agent」的指令共用一套**工具注册表 + 原生 function calling**，加新指令不碰识别/分发逻辑。
-
-**工具注册表 `backend/ai_tools.py`**：
-- 每个 `Tool` = `name / description / parameters(JSON Schema) / handler`，存全局 `TOOL_REGISTRY`
-- `@register_tool(name, description, parameters)` 装饰器注册；handler 收 `args: dict`、返回 `ToolResult(ok, reply, meta)`（`meta` 是副作用标记，供前端联动）
-- `openai_tools_spec()` 把注册表导出成 OpenAI function-calling 的 `tools` 参数；`execute_tool(name, args)` 统一执行（未知工具/异常都安全兜底）
-- handler 自己负责严格校验落地（如 `assign_task` 复用 `routers/tasks.append_bounty_task()`，clamp hours 0.25~8 / stars 1~5 / content 非空）
-
-**传输层 `ai_client.chat_with_tools()`**：原生 function calling，第一期仅 OpenAI 兼容协议（`supports_tools()` 判 protocol=="openai"），带 `tools` + `tool_choice`，解析 `tool_calls`。支持传 `tool_choice={"type":"function",...}` 强制调某工具。
-
-**⚠️ 推理模型（thinking mode）的 FC 坑（重要）**：`deepseek-v4-pro` 等推理模型**不支持强制 `tool_choice`**（报 `Thinking mode does not support this tool_choice`），且 `auto` 模式下在强人设下很少主动调工具——原生 FC 在它身上不可靠。但**按指令返回 JSON 极稳定**。故采用**双传输路径**（都由注册表统一驱动）：
-
-**聊天流程 `routers/ai._chat_react()`（双路径）**：
-- **路径 1（意图命中）**：`match_forced_tool()` 用工具的 `intent_keywords` 匹配用户消息（如「派个任务」「给我个任务」）→ 命中则走 `_run_tool_via_json()`：用 `json_extract_prompt()` 让模型按该工具 schema **返回 JSON 填参数** → 解析 → `execute_tool` 落地。这条对 deepseek 稳定（实测 4/4 命中）
-- **路径 2（意图不明）**：走原生 FC `auto`，让模型自己判断要不要调工具，纯聊天就聊天
-- 任一路径失败 → 降级 `_plain_chat()`，**绝不误操作、不丢聊天能力**
-- `ChatOut.assigned_bounty = meta.get("assigned_bounty")`，前端据此联动
-
-**前端联动（全局赏金弹窗）**：赏金任务可能在**任意页面**产生（随机弹出 / 搭子在聊天里派的），而聊天栏是全局的——所以赏金弹窗也必须全局，否则在非任务页让搭子派任务，任务派了却没人提示。
-- `components/BountyPopup.tsx`：全局赏金弹窗，挂在 `AppLayout`（和 ChatSidebar 一样常驻）。轮询 `pendingBounties`（60s）+ 监听 `agent:bounty-refresh`（聊天派任务后 ChatSidebar 派发，立即 0/0.8/2s 刷新）→ **只在出现没弹过的新赏金时**才弹窗 + `playBountyAppear()`。接受/放弃就地处理，完后派发 `agent:bounty-changed`
-- **「已弹过的 id」持久化在 localStorage**（`agent.shownBountyIds`，按游戏日分桶跨天自动清）。否则切页面时组件重挂载会丢失会话级记忆，把已有 pending 当成新的反复弹——这是修过的 bug。只有真正新产生的赏金 id 才弹
-- ChatSidebar 派任务成功后，除派发 `agent:bounty-refresh`，还在**聊天栏内**显示一条确认条（`bounty_content`：「已派发到「每日任务」：XXX」），任意页面都看得见，不必切到任务页
-- Tasks 页不再自己弹窗/轮询；只监听 `agent:bounty-refresh`/`agent:bounty-changed` 刷新本页赏金列表（已接受区 + 「赏金 N」计数）；「赏金 N」按钮派发 `agent:bounty-open` 让全局弹窗打开
-
-**▶ 加一个新指令（如送 buff / 调目标）只需两步，识别/分发零改动**：
-1. 在 `ai_tools.py` 写个 handler，`@register_tool("grant_buff", "...", {JSON Schema}, intent_keywords=["送我buff","给我加成"])`，handler 里落地（调对应 storage/router 函数）+ 返回 `ToolResult`
-2. 若有前端副作用，在 handler 的 `meta` 里加标记，前端按需监听新事件
-
-就这样——JSON 提取 prompt、FC 的 tools 参数、意图匹配、执行分发全自动带上新工具。`intent_keywords` 决定它走「稳定的 JSON 提取路径」，留空则只靠 FC auto。
-
-#### 触发点
-
-| trigger | 概率/冷却 | 位置 / 说明 |
-|---------|------|------|
-| `win_created` | 1.0 / 无冷却 | `routers/wins.py` 记录赢麻了后。context 只作背景，不写对话历史 |
-| `completed` / `task_done` | 完成必反馈 | `routers/tasks.py` 统一通过 `emit_task_event("completed", task_type, ...)` 触发，覆盖 daily/kept/routine/bounty |
-| `interrupted` / `task_failed` | 按概率/冷却 | `save_run_result` 中断（giveup）/ 力竭（failed） |
-| `idle` | 主动 | `start_idle_speaker` 后台定时，久未动静随口冒泡 |
-| `chat` | 用户主动 | `POST /ai/chat`，带工具能力（可派任务，见上） |
-
-#### 待接入触发点（后续逐步实现）
-
-- `task_start`（已注册，但计时开始无后端 hook，暂未启用）
-- 每日首次打开
-- 更多聊天工具（送 buff、调目标等）——在 `ai_tools.py` 加 handler + `@register_tool` 即可，见上「加一个新指令」
-- Anthropic 协议的 function calling 传输层（目前仅 OpenAI 兼容，Anthropic 自动降级闲聊）
-
-#### 实现文件
-
-- 后端：`routers/ai.py`（搭子核心 + dialogue/chat 接口 + `_data_steer()` 随机引导报数据）+ `storage/ai_dialogue.py`（对话历史/记忆）+ `supervisor_context.py`（业务数据聚合 + 随机抽样）+ `supervisor_stats.py`（可量化数据洞察，Python 统计历史纪录/日均/连续天数等）+ `ai_client.chat_messages()`（多轮）+ `storage/tasks.py` 的 `load_task_runs()`
-- 前端：`components/ChatSidebar.tsx`（聊天栏 + 思考动画，派任务后派发 `agent:bounty-refresh`）+ `AppLayout` 左侧挂载 + `api.ts` 的 `ai.dialogue / ai.chat` + `sounds.ts` 的 `playChatMessage()` + `index.css` 的 `animate-typing-dot` + `pages/Wins.tsx` 记录后派发 `agent:dialogue-refresh` + `pages/Tasks.tsx` 监听 `agent:bounty-refresh` 立即刷新赏金
-- 聊天工具调用（AI 接管 agent）：`ai_tools.py`（工具注册表 + execute_tool）+ `ai_client.chat_with_tools()`（OpenAI 原生 FC 传输层）+ `routers/ai.py` 的 `_chat_react()` + `routers/tasks.py` 的 `append_bounty_task()`（assign_task 落地）
+## 当前待办
+
+- 给更多 buff 类型补兑现逻辑后再开放随机池。
+- 做 buff 历史/收集展示。
+- 继续观察 AI 回复质量，重点看是否个性化、是否混淆数据口径。
+- 后续可扩展更多聊天工具，例如调整目标、发 buff、生成计划。

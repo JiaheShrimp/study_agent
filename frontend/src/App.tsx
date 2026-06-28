@@ -9,18 +9,22 @@ import { Settings } from '@/pages/Settings'
 import { SpinnerPage } from '@/pages/SpinnerPage'
 import { SlotMachine } from '@/components/SlotMachine'
 import { GoalSettlement } from '@/components/GoalSettlement'
-import { api, type DailyBonus } from '@/lib/api'
+import { api, type DailyBonus, type DiceBonusBuff } from '@/lib/api'
 
 export default function App() {
   const [showSlot, setShowSlot] = useState(false)
   const [bonus, setBonus] = useState<DailyBonus | null>(null)
+  const [pendingDiceBuffs, setPendingDiceBuffs] = useState<DiceBonusBuff[]>([])
 
   useEffect(() => {
     api.bonus.today().then(b => {
       if (b) {
         setBonus(b)
       } else {
-        setShowSlot(true)
+        api.bonus.pendingDiceBuffs()
+          .then(setPendingDiceBuffs)
+          .catch(() => setPendingDiceBuffs([]))
+          .finally(() => setShowSlot(true))
       }
     }).catch(() => {
       // 后端未就绪，不弹老虎机，等后端启动后再正常显示
@@ -47,6 +51,7 @@ export default function App() {
 
       {showSlot && (
         <SlotMachine
+          pendingDiceBuffs={pendingDiceBuffs}
           onComplete={handleBonusComplete}
           onSkip={() => setShowSlot(false)}
         />

@@ -190,7 +190,19 @@ export interface DailyBonus {
   rolls: number[]
   multiplier: number  // 1.0-3.0，一位小数
   dice_bonus?: number
+  dice_bonus_buffs?: {
+    reward_id: string
+    buff_id: string
+    name: string
+    emoji: string
+    desc: string
+    task_id: string
+    task_content: string
+    task_type: string
+  }[]
 }
+
+export type DiceBonusBuff = NonNullable<DailyBonus['dice_bonus_buffs']>[number]
 
 export interface TaskTemplate {
   id: string
@@ -324,6 +336,7 @@ export const api = {
   },
   bonus: {
     today: () => get<DailyBonus | null>('/bonus/today'),
+    pendingDiceBuffs: () => get<DiceBonusBuff[]>('/bonus/pending-dice-buffs'),
     save: (bonus: DailyBonus) => post<DailyBonus>('/bonus/today', bonus),
   },
   reminder: {
